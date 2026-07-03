@@ -1,0 +1,31 @@
+{
+  "racks": [
+    {
+      "id": "rack-1",
+      "label": "Oracle VM — Rack A",
+      "location": "Oracle Cloud / DC-1",
+      "totalU": 42,
+      "powerCapW": 5000,
+      "servers": [
+        {
+          "id": "node-1",
+          "hostname": "k3d-mavops-server-0",
+          "uStart": 1,
+          "uHeight": 2
+        },
+        {
+          "id": "node-2",
+          "hostname": "k3d-mavops-agent-0",
+          "uStart": 3,
+          "uHeight": 2
+        },
+        {
+          "id": "node-3",
+          "hostname": "k3d-mavops-agent-1",
+          "uStart": 5,
+          "uHeight": 2
+        }
+      ]
+    }
+  ]
+}

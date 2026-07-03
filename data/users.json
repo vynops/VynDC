@@ -1,0 +1,12 @@
+[
+  {
+    "id": "af53d698-f489-481a-a0e8-d11a2ab57a22",
+    "email": "admin@vyndc.local",
+    "name": "Admin",
+    "role": "admin",
+    "passwordHash": "a0869b3396bbc3cd74d9fd45bd99aea8e3527219dcca8693b7e056ec8ec527d7",
+    "passwordSalt": "43876e9a1d20a304718f2e735e524137",
+    "createdAt": "2026-07-02T15:03:28.115Z",
+    "lastLogin": "2026-07-03T08:11:07.471Z"
+  }
+]

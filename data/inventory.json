@@ -1,0 +1,35 @@
+[
+  {
+    "hostname": "k3d-mavops-server-0",
+    "role": "Control Plane",
+    "model": "Oracle Cloud VM.Standard.E4.Flex",
+    "serial": "ocid1.instance.oc1.server-0",
+    "vendor": "Oracle Cloud",
+    "purchaseDate": "2025-12-01",
+    "warrantyExpiry": "2028-12-01",
+    "costUsd": 0,
+    "location": "Oracle Cloud / DC-1 / Rack A"
+  },
+  {
+    "hostname": "k3d-mavops-agent-0",
+    "role": "Worker Node",
+    "model": "Oracle Cloud VM.Standard.E4.Flex",
+    "serial": "ocid1.instance.oc1.agent-0",
+    "vendor": "Oracle Cloud",
+    "purchaseDate": "2025-12-01",
+    "warrantyExpiry": "2028-12-01",
+    "costUsd": 0,
+    "location": "Oracle Cloud / DC-1 / Rack A"
+  },
+  {
+    "hostname": "k3d-mavops-agent-1",
+    "role": "Worker Node",
+    "model": "Oracle Cloud VM.Standard.E4.Flex",
+    "serial": "ocid1.instance.oc1.agent-1",
+    "vendor": "Oracle Cloud",
+    "purchaseDate": "2025-12-01",
+    "warrantyExpiry": "2028-12-01",
+    "costUsd": 0,
+    "location": "Oracle Cloud / DC-1 / Rack A"
+  }
+]

@@ -1,0 +1,6 @@
+node_modules/
+.next/
+.env.local
+data/seen-alerts.json
+data/dispatch-lock.json
+data/settings.json
