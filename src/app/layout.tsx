@@ -8,7 +8,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "VynDC — Datacenter Operations Dashboard",
+  title: "VynDC - VynOps Suite",
   description: "Intelligent datacenter monitoring, incident management, and AI-powered operations for modern infrastructure.",
 };
 
