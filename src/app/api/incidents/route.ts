@@ -4,6 +4,7 @@ import { simulatedIncidents } from '@/lib/simulation'
 import type { Incident } from '@/lib/simulation'
 import { isAlertmanagerConfigured, alertmanagerAlerts } from '@/lib/prometheus'
 import { dispatchAlerts } from '@/lib/alert-dispatcher'
+import { sendSlack } from '@/lib/notifier'
 import fs from 'fs'
 import path from 'path'
 
@@ -58,20 +59,41 @@ export async function PATCH(req: NextRequest) {
   const auth = await requireRole(req, 'editor')
   if (auth instanceof NextResponse) return auth
   try {
-    const { id, status, notes } = await req.json() as { id: string; status: string; notes?: string }
-    if (!id || !['acknowledged', 'resolved', 'open'].includes(status)) {
+    const { id, status, notes, assignTo, _title, _severity, _hostname } = await req.json() as {
+      id: string; status?: string; notes?: string; assignTo?: string
+      _title?: string; _severity?: string; _hostname?: string
+    }
+    if (!id || (status && !['acknowledged', 'resolved', 'open'].includes(status)) || (!status && assignTo === undefined)) {
       return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
     }
     const overrides = loadOverrides()
     const actor = typeof auth === 'object' && 'email' in auth ? (auth as { email: string }).email : undefined
-    overrides[id] = {
-      ...overrides[id],
-      status: status as Incident['status'],
-      resolvedAt: status === 'resolved' ? new Date().toISOString() : (status === 'open' ? undefined : overrides[id]?.resolvedAt),
-      assignedTo: status !== 'open' ? actor : undefined,
-      ...(notes !== undefined ? { notes } : {}),
+
+    if (status) {
+      overrides[id] = {
+        ...overrides[id],
+        status: status as Incident['status'],
+        resolvedAt: status === 'resolved' ? new Date().toISOString() : (status === 'open' ? undefined : overrides[id]?.resolvedAt),
+        // Explicit assignTo takes priority; fall back to auto-assigning the actor on ack/resolve
+        assignedTo: assignTo !== undefined ? (assignTo || undefined) : (status !== 'open' ? actor : undefined),
+        ...(notes !== undefined ? { notes } : {}),
+      }
+    } else {
+      // Pure assignment — no status change
+      overrides[id] = { ...overrides[id], assignedTo: assignTo || undefined }
     }
+
     saveOverrides(overrides)
+
+    // Slack notification on assignment
+    const effectiveAssignee = assignTo ?? (status && status !== 'open' ? actor : undefined)
+    if (effectiveAssignee) {
+      const sev = (_severity ?? 'incident').toUpperCase()
+      const title = _title ?? id
+      const host = _hostname ? ` — \`${_hostname}\`` : ''
+      sendSlack(`🎯 *Incident Assigned*\n*[${sev}]* ${title}${host}\n→ Assigned to: \`${effectiveAssignee}\``).catch(() => {})
+    }
+
     return NextResponse.json({ ok: true })
   } catch {
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
