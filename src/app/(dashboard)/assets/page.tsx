@@ -1,6 +1,7 @@
 'use client'
+import { useState } from 'react'
 import useSWR from 'swr'
-import { Server, HardDrive, Download, AlertTriangle, ShieldCheck, ShieldAlert } from 'lucide-react'
+import { Server, HardDrive, Download, AlertTriangle, ShieldCheck, ShieldAlert, X, Cpu, MemoryStick, Thermometer, Zap, Network, MapPin, Clock } from 'lucide-react'
 import type { Server as ServerType, DiskAsset } from '@/lib/simulation'
 import type { InventoryEntry } from '@/app/api/inventory/route'
 import { exportCsv } from '@/lib/utils'
@@ -18,6 +19,8 @@ export default function AssetsPage() {
   const { data: servers = [] } = useSWR<ServerType[]>('/api/servers', fetcher)
   const { data: disks = [] } = useSWR<DiskAsset[]>('/api/storage', fetcher)
   const { data: inventory = [] } = useSWR<InventoryEntry[]>('/api/inventory', fetcher)
+  const [selectedServer, setSelectedServer] = useState<ServerType | null>(null)
+  const [selectedDisk, setSelectedDisk] = useState<DiskAsset | null>(null)
 
   // Build a hostname → CMDB entry map for fast lookup
   const cmdb = Object.fromEntries(inventory.map(e => [e.hostname, e]))
@@ -56,6 +59,7 @@ export default function AssetsPage() {
   }
 
   return (
+    <>
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto">
       {/* Summary */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -117,7 +121,7 @@ export default function AssetsPage() {
                   : daysToWarranty < 90 ? 'text-yellow-400'
                   : 'text-green-400'
                 return (
-                  <tr key={s.id} className="border-b border-slate-800/50 hover:bg-slate-800/20">
+                  <tr key={s.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer transition-colors" onClick={() => setSelectedServer(s)}>
                     <td className="p-3 text-white font-medium">
                       <div className="flex items-center gap-1">
                         {(s.status === 'critical' || s.status === 'warning') && <AlertTriangle size={10} className={s.status === 'critical' ? 'text-red-400' : 'text-yellow-400'} />}
@@ -176,7 +180,7 @@ export default function AssetsPage() {
               {disks.map(d => {
                 const usedPct = (d.usedGiB / d.capacityGiB) * 100
                 return (
-                  <tr key={d.id} className="border-b border-slate-800/50 hover:bg-slate-800/20">
+                  <tr key={d.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer transition-colors" onClick={() => setSelectedDisk(d)}>
                     <td className="p-3 text-white">{d.hostname}</td>
                     <td className="p-3 text-slate-400">{d.rack}</td>
                     <td className="p-3 text-slate-500">{d.slot}</td>
@@ -193,6 +197,205 @@ export default function AssetsPage() {
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    {/* Server Detail Drawer */}
+    {selectedServer && (() => {
+      const s = selectedServer
+      const c = cmdb[s.hostname] ?? {}
+      const warrantyDate = c.warrantyExpiry ? new Date(c.warrantyExpiry) : null
+      const daysToWarranty = warrantyDate ? Math.ceil((warrantyDate.getTime() - Date.now()) / 86400000) : null
+      const wColor = daysToWarranty === null ? 'text-slate-500' : daysToWarranty < 0 ? 'text-red-400' : daysToWarranty < 90 ? 'text-yellow-400' : 'text-green-400'
+      const cpuBar = Math.min(100, s.cpuUsagePct)
+      const memBar = Math.min(100, (s.memoryUsedGiB / s.memoryGiB) * 100)
+      const pwrBar = Math.min(100, (s.powerWatts / (s.powerCapWatts || 1)) * 100)
+      return (
+        <div className="fixed inset-0 bg-black/25 z-50 flex justify-end" onClick={() => setSelectedServer(null)}>
+          <div className="w-full max-w-md bg-[#0d1117] border-l border-slate-800 h-full overflow-y-auto" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="sticky top-0 bg-[#0d1117] border-b border-slate-800 px-5 py-4 flex items-center justify-between z-10">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Server size={14} className="text-orange-400" />
+                  <span className="text-sm font-bold text-white">{s.hostname}</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${STATUS_BADGE[s.status]}`}>{s.status}</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">{c.role ?? 'Server'} · {s.rack} U{s.uPosition}</div>
+              </div>
+              <button onClick={() => setSelectedServer(null)} className="text-slate-500 hover:text-white p-1"><X size={16} /></button>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {/* Live metrics */}
+              <Section2 icon={Cpu} title="Live Metrics">
+                <MetricBar label="CPU" value={`${s.cpuUsagePct}%`} pct={cpuBar} color={cpuBar > 90 ? 'bg-red-500' : cpuBar > 75 ? 'bg-orange-500' : 'bg-green-500'} />
+                <MetricBar label="Memory" value={`${s.memoryUsedGiB.toFixed(1)} / ${s.memoryGiB} GiB`} pct={memBar} color={memBar > 90 ? 'bg-red-500' : memBar > 75 ? 'bg-orange-500' : 'bg-blue-500'} />
+                <MetricBar label="Power" value={`${s.powerWatts}W / ${s.powerCapWatts}W`} pct={pwrBar} color={pwrBar > 90 ? 'bg-red-500' : pwrBar > 75 ? 'bg-yellow-500' : 'bg-purple-500'} />
+                <InfoRow label="Temperature" value={`${s.tempCelsius}°C`} valueClass={s.tempCelsius > 80 ? 'text-red-400' : s.tempCelsius > 70 ? 'text-yellow-400' : 'text-green-400'} />
+                <InfoRow label="Uptime" value={`${Math.floor(s.uptime/86400)}d ${Math.floor((s.uptime%86400)/3600)}h`} />
+                <InfoRow label="Last Seen" value={new Date(s.lastSeen).toLocaleString()} />
+              </Section2>
+
+              {/* Hardware */}
+              <Section2 icon={Server} title="Hardware">
+                <InfoRow label="CPU Model" value={s.cpuModel} />
+                <InfoRow label="CPU Cores" value={String(s.cpuCores)} />
+                <InfoRow label="Memory" value={`${s.memoryGiB} GiB`} />
+                <InfoRow label="Disks" value={`${s.diskCount} disk${s.diskCount !== 1 ? 's' : ''} · ${s.diskTotalTiB.toFixed(1)} TiB total`} />
+                <InfoRow label="OS" value={s.os} />
+                <InfoRow label="IPMI" value={s.ipmi || '—'} mono />
+              </Section2>
+
+              {/* Network interfaces */}
+              {s.networkInterfaces?.length > 0 && (
+                <Section2 icon={Network} title="Network Interfaces">
+                  {s.networkInterfaces.map((n, i) => (
+                    <div key={i} className="flex items-center justify-between py-1.5 border-b border-slate-800/50 last:border-0">
+                      <span className="text-xs font-mono text-slate-300">{n.name ?? `eth${i}`}</span>
+                      <div className="text-right text-[11px] text-slate-500">
+                        <div>{n.speedGbps} Gbps</div>
+                        {(n.rxMbps != null || n.txMbps != null) && <div>↓{n.rxMbps?.toFixed(1)} ↑{n.txMbps?.toFixed(1)} Mbps</div>}
+                      </div>
+                    </div>
+                  ))}
+                </Section2>
+              )}
+
+              {/* Physical */}
+              <Section2 icon={MapPin} title="Physical Location">
+                <InfoRow label="Rack" value={s.rack} />
+                <InfoRow label="U Position" value={`U${s.uPosition} (${s.uHeight}U height)`} />
+              </Section2>
+
+              {/* CMDB / Asset */}
+              <Section2 icon={ShieldCheck} title="Asset / CMDB">
+                <InfoRow label="Vendor" value={c.vendor || '—'} />
+                <InfoRow label="Model" value={c.model || '—'} />
+                <InfoRow label="Serial" value={c.serial || '—'} mono />
+                <InfoRow label="Purchase Date" value={c.purchaseDate || '—'} />
+                <InfoRow label="Warranty" value={
+                  c.warrantyExpiry
+                    ? daysToWarranty !== null && daysToWarranty < 0
+                      ? `Expired ${Math.abs(daysToWarranty)}d ago`
+                      : `${c.warrantyExpiry} (${daysToWarranty}d left)`
+                    : '—'
+                } valueClass={wColor} />
+                <InfoRow label="Cost" value={c.costUsd ? `$${c.costUsd.toLocaleString()}` : '—'} />
+                <InfoRow label="Location" value={c.location || '—'} />
+              </Section2>
+            </div>
+          </div>
+        </div>
+      )
+    })()}
+
+    {/* ── Disk Detail Drawer ────────────────────────────────────────────── */}
+    {selectedDisk && (() => {
+      const d = selectedDisk
+      const usedPct = (d.usedGiB / d.capacityGiB) * 100
+      const wDate = d.warrantyExpiry ? new Date(d.warrantyExpiry) : null
+      const wDays = wDate ? Math.ceil((wDate.getTime() - Date.now()) / 86400000) : null
+      const wColor = wDays === null ? 'text-slate-500' : wDays < 0 ? 'text-red-400' : wDays < 90 ? 'text-yellow-400' : 'text-green-400'
+      const healthColor = d.smart.health === 'failing' ? 'bg-red-500/20 text-red-400 border border-red-500/30' : d.smart.health === 'warning' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' : 'bg-green-500/10 text-green-400 border border-green-500/20'
+      const tempColor = d.smart.temperature > 50 ? 'text-red-400' : d.smart.temperature > 40 ? 'text-yellow-400' : 'text-green-400'
+      return (
+        <div className="fixed inset-0 bg-black/25 z-50 flex justify-end" onClick={() => setSelectedDisk(null)}>
+          <div className="w-full max-w-md bg-[#0d1117] border-l border-slate-800 h-full overflow-y-auto" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="sticky top-0 bg-[#0d1117] border-b border-slate-800 px-5 py-4 flex items-center justify-between z-10">
+              <div>
+                <div className="flex items-center gap-2">
+                  <HardDrive size={14} className="text-orange-400" />
+                  <span className="text-sm font-bold text-white">{d.hostname} / {d.slot}</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${healthColor}`}>{d.smart.health}</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">{d.type} · {d.rack} · {d.model}</div>
+              </div>
+              <button onClick={() => setSelectedDisk(null)} className="text-slate-500 hover:text-white p-1"><X size={16} /></button>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {/* Storage utilisation */}
+              <Section2 icon={HardDrive} title="Storage">
+                <MetricBar
+                  label="Used"
+                  value={`${d.usedGiB >= 1024 ? (d.usedGiB/1024).toFixed(1)+' TiB' : d.usedGiB+' GiB'} / ${d.capacityGiB >= 1024 ? (d.capacityGiB/1024).toFixed(1)+' TiB' : d.capacityGiB+' GiB'}`}
+                  pct={usedPct}
+                  color={usedPct > 85 ? 'bg-red-500' : usedPct > 70 ? 'bg-yellow-500' : 'bg-blue-500'}
+                />
+                <InfoRow label="Model" value={d.model} />
+                <InfoRow label="Type" value={d.type} />
+                <InfoRow label="Capacity" value={d.capacityGiB >= 1024 ? `${(d.capacityGiB/1024).toFixed(1)} TiB` : `${d.capacityGiB} GiB`} />
+                <InfoRow label="Free" value={(() => { const free = d.capacityGiB - d.usedGiB; return free >= 1024 ? `${(free/1024).toFixed(1)} TiB` : `${free} GiB` })()} />
+              </Section2>
+
+              {/* SMART */}
+              <Section2 icon={Thermometer} title="SMART Health">
+                <InfoRow label="Health" value={d.smart.health.toUpperCase()} valueClass={d.smart.health === 'failing' ? 'text-red-400 font-bold' : d.smart.health === 'warning' ? 'text-yellow-400 font-bold' : 'text-green-400'} />
+                <InfoRow label="Temperature" value={`${d.smart.temperature}°C`} valueClass={tempColor} />
+                <InfoRow label="Reallocated Sectors" value={String(d.smart.reallocatedSectors)} valueClass={d.smart.reallocatedSectors > 0 ? 'text-red-400 font-bold' : 'text-green-400'} />
+                <InfoRow label="Power-On Hours" value={`${d.smart.powerOnHours.toLocaleString()} h (${Math.round(d.smart.powerOnHours/8760*10)/10} yrs)`} />
+              </Section2>
+
+              {/* Lifecycle */}
+              <Section2 icon={Clock} title="Lifecycle">
+                <InfoRow label="Disk Age" value={`${d.age} year${d.age !== 1 ? 's' : ''}`} valueClass={d.age >= 5 ? 'text-red-400' : d.age >= 3 ? 'text-yellow-400' : 'text-slate-300'} />
+                <InfoRow label="Warranty Expiry" value={
+                  d.warrantyExpiry
+                    ? wDays !== null && wDays < 0
+                      ? `Expired ${Math.abs(wDays)}d ago`
+                      : `${d.warrantyExpiry} (${wDays}d left)`
+                    : '—'
+                } valueClass={wColor} />
+                <InfoRow label="Replacement Due" value={d.replacementDue || '—'} valueClass={d.replacementDue ? 'text-orange-400' : 'text-slate-500'} />
+              </Section2>
+
+              {/* Physical */}
+              <Section2 icon={MapPin} title="Physical Location">
+                <InfoRow label="Host" value={d.hostname} />
+                <InfoRow label="Rack" value={d.rack} />
+                <InfoRow label="Slot" value={d.slot} />
+              </Section2>
+            </div>
+          </div>
+        </div>
+      )
+    })()}
+    </>
+  )
+}
+
+function Section2({ icon: Icon, title, children }: { icon: React.ComponentType<{size?:number;className?:string}>; title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-2">
+        <Icon size={11} className="text-orange-400" />
+        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{title}</span>
+      </div>
+      <div className="bg-slate-900/40 border border-slate-800/60 rounded-xl divide-y divide-slate-800/50">{children}</div>
+    </div>
+  )
+}
+
+function InfoRow({ label, value, mono, valueClass }: { label: string; value: string; mono?: boolean; valueClass?: string }) {
+  return (
+    <div className="flex items-center justify-between px-3 py-2 gap-4">
+      <span className="text-[11px] text-slate-500 shrink-0">{label}</span>
+      <span className={`text-[11px] text-right break-all ${mono ? 'font-mono' : ''} ${valueClass ?? 'text-slate-300'}`}>{value}</span>
+    </div>
+  )
+}
+
+function MetricBar({ label, value, pct, color }: { label: string; value: string; pct: number; color: string }) {
+  return (
+    <div className="px-3 py-2.5">
+      <div className="flex justify-between text-[11px] mb-1.5">
+        <span className="text-slate-500">{label}</span>
+        <span className="text-slate-300">{value}</span>
+      </div>
+      <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   )
