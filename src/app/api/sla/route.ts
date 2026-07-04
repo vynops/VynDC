@@ -20,7 +20,8 @@ export async function GET(req: NextRequest) {
       incidents = raw.map(a => ({
         id: a.fingerprint,
         title: a.annotations.summary ?? a.labels.alertname ?? 'Alert',
-        severity: a.labels.severity ?? 'medium',
+        severity: (['critical','high','medium','low'].includes(a.labels.severity)
+          ? a.labels.severity : 'medium'),
         createdAt: a.startsAt,
         status: a.status.state === 'suppressed' ? 'acknowledged' : 'open',
       }))
