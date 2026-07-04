@@ -4,7 +4,7 @@ import { seededRandom } from './seed'
 
 export type ServerStatus = 'healthy' | 'warning' | 'critical' | 'offline'
 export type IncidentSeverity = 'critical' | 'high' | 'medium' | 'low'
-export type DiskHealth = 'good' | 'warning' | 'failing' | 'failed'
+export type DiskHealth = 'healthy' | 'warning' | 'failing' | 'failed'
 
 export interface NetworkInterfaceInfo {
   name: string
@@ -353,7 +353,7 @@ export function simulatedDisks(): DiskAsset[] {
       const poh = ageDays * 22
       const realloc = ageDays > 1000 && rng() > 0.7 ? int(1, 50, rng) : 0
 
-      let health: DiskHealth = 'good'
+      let health: DiskHealth = 'healthy'
       if (realloc > 20) health = 'failing'
       else if (realloc > 5) health = 'warning'
       else if (ageDays > 1800 && rng() > 0.8) health = 'failing'

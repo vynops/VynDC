@@ -37,7 +37,7 @@ async function liveStorage(): Promise<DiskAsset[]> {
       usedGiB,
       age: 0,
       smart: {
-        health: usedPct > 0.95 ? 'failing' : usedPct > 0.85 ? 'warning' : 'good',
+        health: usedPct > 0.95 ? 'failing' : usedPct > 0.85 ? 'warning' : 'healthy',
         reallocatedSectors: 0,
         powerOnHours: 0,
         temperature: 0,
