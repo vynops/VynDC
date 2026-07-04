@@ -3,8 +3,24 @@ import { requireRole } from '@/lib/auth'
 import { simulatedDisks } from '@/lib/simulation'
 import type { DiskAsset } from '@/lib/simulation'
 import { isPrometheusConfigured, promQuery } from '@/lib/prometheus'
+import fs from 'fs'
+import path from 'path'
+
+function loadWarrantyMap(): Record<string, string> {
+  try {
+    const file = path.join(process.cwd(), 'data', 'inventory.json')
+    if (!fs.existsSync(file)) return {}
+    const entries: Array<{ hostname?: string; warrantyExpiry?: string }> = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return Object.fromEntries(
+      entries.filter(e => e.hostname && e.warrantyExpiry).map(e => [e.hostname!, e.warrantyExpiry!])
+    )
+  } catch {
+    return {}
+  }
+}
 
 async function liveStorage(): Promise<DiskAsset[]> {
+  const warrantyMap = loadWarrantyMap()
   const [diskTotal, diskAvail, diskDevice] = await Promise.all([
     promQuery('node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}'),
     promQuery('node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}'),
@@ -42,7 +58,7 @@ async function liveStorage(): Promise<DiskAsset[]> {
         powerOnHours: 0,
         temperature: 0,
       },
-      warrantyExpiry: '',
+      warrantyExpiry: warrantyMap[instance.split(':')[0]] ?? '',
     })
   })
 
