@@ -1,12 +1,18 @@
 'use client'
 import { useState } from 'react'
 import useSWR from 'swr'
-import { Phone, Plus, Trash2, X, Clock, User, Calendar, Edit2 } from 'lucide-react'
+import { Phone, Plus, Trash2, X, Clock, User, Calendar, Edit2, Activity, AlertTriangle, CheckCircle } from 'lucide-react'
 import type { Shift } from '@/lib/oncall-store'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
 interface OncallData { shifts: Shift[] }
+
+interface TrackedIncident {
+  id: string; title: string; severity: string; category: string
+  hostname?: string; status: 'open' | 'acknowledged' | 'resolved'
+  createdAt: string; resolvedAt?: string; assignedTo?: string
+}
 
 function shiftStatus(s: Shift): 'active' | 'upcoming' | 'past' {
   const now = new Date()
@@ -23,6 +29,28 @@ const STATUS_STYLE = {
   active:   'bg-green-500/15 text-green-400 border border-green-500/30',
   upcoming: 'bg-blue-500/15 text-blue-400 border border-blue-500/30',
   past:     'bg-slate-700/50 text-slate-500 border border-slate-700',
+}
+
+const SEV_BADGE: Record<string, string> = {
+  critical: 'bg-red-500/20 text-red-400 border border-red-500/30',
+  high:     'bg-orange-500/20 text-orange-400 border border-orange-500/30',
+  medium:   'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
+  low:      'bg-blue-500/20 text-blue-400 border border-blue-500/30',
+}
+const INC_ST: Record<string, string> = {
+  open: 'text-red-400', acknowledged: 'text-yellow-400', resolved: 'text-green-400',
+}
+
+function fmtAge(iso: string): string {
+  const h = Math.floor((Date.now() - new Date(iso).getTime()) / 3600000)
+  const d = Math.floor(h / 24)
+  return d > 0 ? `${d}d ago` : h > 0 ? `${h}h ago` : 'just now'
+}
+function fmtDuration(a: string, b: string): string {
+  const m = Math.round((new Date(b).getTime() - new Date(a).getTime()) / 60000)
+  if (m >= 1440) return `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`
+  if (m >= 60)   return `${Math.floor(m / 60)}h ${m % 60}m`
+  return `${m}m`
 }
 
 function AddShiftModal({ onClose, onDone, editShift }: { onClose: () => void; onDone: () => void; editShift?: Shift }) {
@@ -114,12 +142,34 @@ function AddShiftModal({ onClose, onDone, editShift }: { onClose: () => void; on
 
 export default function OnCallPage() {
   const { data, mutate } = useSWR<OncallData>('/api/oncall', fetcher, { refreshInterval: 30000 })
+  const { data: incidents = [] } = useSWR<TrackedIncident[]>('/api/incidents', fetcher, { refreshInterval: 30000 })
   const [showAdd, setShowAdd] = useState(false)
   const [editShift, setEditShift] = useState<Shift | undefined>()
 
   const shifts = data?.shifts ?? []
   const activeNow = shifts.filter(s => shiftStatus(s) === 'active')
   const sorted = [...shifts].sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
+
+  // Build engineer workload map
+  const engMap = new Map<string, { name: string; email: string; st: 'active'|'upcoming'|'past'|'unscheduled'; incidents: TrackedIncident[] }>()
+  shifts.forEach(s => {
+    const st = shiftStatus(s)
+    const ex = engMap.get(s.userEmail)
+    if (!ex || st === 'active' || (st === 'upcoming' && ex.st === 'past')) {
+      engMap.set(s.userEmail, { name: s.userName, email: s.userEmail, st, incidents: [] })
+    }
+  })
+  incidents.forEach(inc => {
+    if (!inc.assignedTo) return
+    if (!engMap.has(inc.assignedTo)) {
+      engMap.set(inc.assignedTo, { name: inc.assignedTo.split('@')[0], email: inc.assignedTo, st: 'unscheduled', incidents: [] })
+    }
+    engMap.get(inc.assignedTo)!.incidents.push(inc)
+  })
+  const engOrder = { active: 0, upcoming: 1, unscheduled: 2, past: 3 }
+  const engineers = [...engMap.values()]
+    .filter(e => e.incidents.length > 0 || e.st === 'active' || e.st === 'upcoming')
+    .sort((a, b) => engOrder[a.st] - engOrder[b.st])
 
   async function removeShift(id: string) {
     await fetch(`/api/oncall?id=${id}`, { method: 'DELETE' })
@@ -224,6 +274,75 @@ export default function OnCallPage() {
       </div>
 
       {showAdd && <AddShiftModal editShift={editShift} onClose={() => { setShowAdd(false); setEditShift(undefined) }} onDone={() => { setShowAdd(false); setEditShift(undefined); mutate() }} />}
+
+      {/* Engineer Workload */}
+      {engineers.length > 0 && (
+        <div className="bg-[#111827] border border-slate-800/60 rounded-2xl overflow-hidden">
+          <div className="flex items-center gap-2 p-4 border-b border-slate-800">
+            <Activity size={14} className="text-orange-400" />
+            <span className="text-sm font-bold text-white">Engineer Workload</span>
+            <span className="ml-auto text-xs text-slate-500">
+              {incidents.filter(i => i.assignedTo).length} assigned · {incidents.filter(i => i.assignedTo && i.status !== 'resolved').length} open
+            </span>
+          </div>
+
+          {engineers.map((eng, idx) => {
+            const open = eng.incidents.filter(i => i.status === 'open').length
+            const ack  = eng.incidents.filter(i => i.status === 'acknowledged').length
+            const res  = eng.incidents.filter(i => i.status === 'resolved').length
+            const stLabel = eng.st === 'active' ? 'on-call now' : eng.st === 'upcoming' ? 'upcoming' : eng.st === 'past' ? 'past' : 'unscheduled'
+            const stColor = eng.st === 'active' ? 'text-green-400' : eng.st === 'upcoming' ? 'text-blue-400' : 'text-slate-500'
+            const avatarColor = eng.st === 'active' ? 'bg-green-500/20 text-green-400' : 'bg-slate-700 text-slate-400'
+            return (
+              <div key={eng.email} className={`p-4 ${idx < engineers.length - 1 ? 'border-b border-slate-800/50' : ''}`}>
+                {/* Engineer header */}
+                <div className="flex items-center gap-3 mb-3">
+                  <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${avatarColor}`}>
+                    {eng.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-white">{eng.name}</span>
+                      <span className={`text-[10px] font-medium ${stColor}`}>● {stLabel}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 truncate">{eng.email}</div>
+                  </div>
+                  <div className="ml-auto flex items-center gap-2 shrink-0 text-[11px]">
+                    {open > 0   && <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 font-bold">{open} open</span>}
+                    {ack > 0    && <span className="px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 font-bold">{ack} ack</span>}
+                    {res > 0    && <span className="px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 font-bold">{res} resolved</span>}
+                    {eng.incidents.length === 0 && <span className="text-slate-600">no incidents</span>}
+                  </div>
+                </div>
+
+                {/* Incident rows */}
+                {eng.incidents.length > 0 && (
+                  <div className="ml-12 space-y-1.5">
+                    {eng.incidents.map(inc => (
+                      <div key={inc.id} className="flex items-center gap-2 py-1.5 px-2.5 rounded-xl bg-slate-800/40 hover:bg-slate-800/70 transition-colors">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 ${SEV_BADGE[inc.severity] ?? 'bg-slate-700 text-slate-400'}`}>
+                          {inc.severity.toUpperCase()}
+                        </span>
+                        <span className="text-xs text-white truncate flex-1">{inc.title}</span>
+                        {inc.hostname && (
+                          <span className="text-[10px] text-slate-500 font-mono truncate max-w-[120px] hidden sm:block">{inc.hostname}</span>
+                        )}
+                        <span className={`text-[10px] font-medium shrink-0 ${INC_ST[inc.status]}`}>{inc.status}</span>
+                        <span className="text-[10px] text-slate-600 shrink-0">
+                          {inc.status === 'resolved' && inc.resolvedAt
+                            ? <span className="text-green-700" title={`Resolved at ${new Date(inc.resolvedAt).toLocaleString()}`}>✓ {fmtDuration(inc.createdAt, inc.resolvedAt)}</span>
+                            : fmtAge(inc.createdAt)
+                          }
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
