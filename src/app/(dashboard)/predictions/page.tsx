@@ -112,7 +112,14 @@ export default function PredictionsPage() {
             </div>
           </div>
         ))}
-        {filtered.length === 0 && (
+        {filtered.length === 0 && predictions.length === 0 && (
+          <div className="col-span-full bg-[#111827] border border-slate-800/60 rounded-2xl p-8 text-center space-y-2">
+            <div className="text-green-400 text-2xl">✓</div>
+            <div className="text-sm font-medium text-slate-300">All systems healthy</div>
+            <div className="text-xs text-slate-500">No failure predictions detected — all metrics are within normal thresholds</div>
+          </div>
+        )}
+        {filtered.length === 0 && predictions.length > 0 && (
           <div className="col-span-full bg-[#111827] border border-slate-800/60 rounded-2xl p-8 text-center text-slate-500 text-sm">
             No predictions match the current filters
           </div>
