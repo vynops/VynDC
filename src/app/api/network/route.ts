@@ -5,7 +5,7 @@ import type { NetworkInterface } from '@/lib/simulation'
 import { isPrometheusConfigured, promQuery } from '@/lib/prometheus'
 
 async function liveNetwork(): Promise<NetworkInterface[]> {
-  const [rxBytes, txBytes, rxErr, txErr, rxDrop, txDrop, speed, linkUp] = await Promise.all([
+  const [rxBytes, txBytes, rxErr, txErr, rxDrop, txDrop, speed, linkUp, nicInfo, mtuData, unameData] = await Promise.all([
     promQuery('rate(node_network_receive_bytes_total{device!~"lo|veth.*|docker.*|br-.*|cni.*"}[2m]) * 8 / 1e6'),
     promQuery('rate(node_network_transmit_bytes_total{device!~"lo|veth.*|docker.*|br-.*|cni.*"}[2m]) * 8 / 1e6'),
     promQuery('rate(node_network_receive_errs_total{device!~"lo|veth.*|docker.*|br-.*|cni.*"}[2m])'),
@@ -14,7 +14,17 @@ async function liveNetwork(): Promise<NetworkInterface[]> {
     promQuery('rate(node_network_transmit_drop_total{device!~"lo|veth.*|docker.*|br-.*|cni.*"}[2m])'),
     promQuery('node_network_speed_bytes{device!~"lo|veth.*|docker.*|br-.*|cni.*"}'),
     promQuery('node_network_up{device!~"lo|veth.*|docker.*|br-.*|cni.*"}'),
+    promQuery('node_network_info{device!~"lo|veth.*|docker.*|br-.*|cni.*"}').catch(() => []),
+    promQuery('node_network_mtu_bytes{device!~"lo|veth.*|docker.*|br-.*|cni.*"}').catch(() => []),
+    promQuery('node_uname_info').catch(() => []),
   ])
+
+  // Build hostname map from IP → nodename
+  const nodeNameMap: Record<string, string> = {}
+  unameData.forEach((r: { metric: Record<string, string>; value: [number, string] }) => {
+    if (r.metric.instance && r.metric.nodename)
+      nodeNameMap[r.metric.instance.split(':')[0]] = r.metric.nodename
+  })
 
   const ifaces: NetworkInterface[] = []
   let idx = 0
@@ -26,11 +36,14 @@ async function liveNetwork(): Promise<NetworkInterface[]> {
 
     const speedBps = parseFloat(key(speed)?.value[1] ?? '0')
     const up = parseFloat(key(linkUp)?.value[1] ?? '1') > 0
+    const info = (nicInfo as typeof rxBytes).find(x => x.metric.instance === instance && x.metric.device === device)
+    const mtuEntry = (mtuData as typeof rxBytes).find(x => x.metric.instance === instance && x.metric.device === device)
+    const ip = instance.split(':')[0]
 
     ifaces.push({
       id: `nic-${++idx}`,
       serverId: `node-${instance}`,
-      hostname: instance.split(':')[0],
+      hostname: nodeNameMap[ip] ?? ip,
       rack: 'rack-1',
       interface: device,
       speedGbps: speedBps > 0 ? speedBps / 1e9 : 1,
@@ -41,6 +54,10 @@ async function liveNetwork(): Promise<NetworkInterface[]> {
       rxDrops: Math.round(parseFloat(key(rxDrop)?.value[1] ?? '0')),
       txDrops: Math.round(parseFloat(key(txDrop)?.value[1] ?? '0')),
       status: up ? 'up' : 'down',
+      duplex: info?.metric.duplex,
+      operstate: info?.metric.operstate,
+      macAddress: info?.metric.address,
+      mtu: mtuEntry ? Math.round(parseFloat(mtuEntry.value[1])) : undefined,
     })
   })
 

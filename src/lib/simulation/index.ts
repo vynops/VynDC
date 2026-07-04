@@ -99,6 +99,10 @@ export interface NetworkInterface {
   rxDrops: number
   txDrops: number
   status: 'up' | 'down' | 'degraded'
+  duplex?: string
+  mtu?: number
+  macAddress?: string
+  operstate?: string
 }
 
 export interface Incident {

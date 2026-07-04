@@ -21,6 +21,30 @@ function loadWarrantyMap(): Record<string, string> {
 
 async function liveStorage(): Promise<DiskAsset[]> {
   const warrantyMap = loadWarrantyMap()
+
+  // Resolve IP-based Prometheus instance labels to real hostnames via node_uname_info
+  let nodeNameMap: Record<string, string> = {}
+  try {
+    const unameRes = await promQuery('node_uname_info')
+    unameRes.forEach(r => {
+      if (r.metric.instance && r.metric.nodename) {
+        nodeNameMap[r.metric.instance.split(':')[0]] = r.metric.nodename
+      }
+    })
+  } catch { /* non-fatal */ }
+
+  // Build per-node temperature map from hwmon sensors
+  const tempMap: Record<string, number> = {}
+  try {
+    const hwmonRes = await promQuery('node_hwmon_temp_celsius')
+    hwmonRes.forEach(r => {
+      const ip = r.metric.instance?.split(':')[0]
+      if (!ip) return
+      const val = parseFloat(r.value[1])
+      if (!isNaN(val) && val > 0) tempMap[ip] = Math.max(tempMap[ip] ?? 0, val)
+    })
+  } catch { /* non-fatal */ }
+
   const [diskTotal, diskAvail, diskDevice] = await Promise.all([
     promQuery('node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}'),
     promQuery('node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}'),
@@ -41,10 +65,12 @@ async function liveStorage(): Promise<DiskAsset[]> {
     const usedGiB = Math.round(usedBytes / (1024 ** 3) * 10) / 10
     const usedPct = totalBytes > 0 ? usedBytes / totalBytes : 0
 
+    const ip = instance.split(':')[0]
+    const hostname = nodeNameMap[ip] ?? ip
     disks.push({
       id: `disk-${++idx}`,
       serverId: `node-${instance}`,
-      hostname: instance.split(':')[0],
+      hostname,
       rack: 'rack-1',
       slot: mountpoint,
       model: device ?? fstype ?? 'unknown',
@@ -56,9 +82,9 @@ async function liveStorage(): Promise<DiskAsset[]> {
         health: usedPct > 0.95 ? 'failing' : usedPct > 0.85 ? 'warning' : 'healthy',
         reallocatedSectors: 0,
         powerOnHours: 0,
-        temperature: 0,
+        temperature: Math.round(tempMap[ip] ?? 0),
       },
-      warrantyExpiry: warrantyMap[instance.split(':')[0]] ?? '',
+      warrantyExpiry: warrantyMap[hostname] ?? warrantyMap[ip] ?? '',
     })
   })
 

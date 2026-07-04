@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import useSWR from 'swr'
-import { Network, Search, Download, AlertTriangle } from 'lucide-react'
+import { Network, Search, Download, AlertTriangle, X, ArrowDown, ArrowUp, Activity, Cpu } from 'lucide-react'
 import type { NetworkInterface } from '@/lib/simulation'
 import { exportCsv } from '@/lib/utils'
 
@@ -13,10 +13,20 @@ const STATUS_BADGE: Record<string, string> = {
   down: 'bg-red-500/20 text-red-400 border border-red-500/30',
 }
 
+function InfoRow({ label, value, mono, color }: { label: string; value: string; mono?: boolean; color?: string }) {
+  return (
+    <div className="flex justify-between items-center gap-2">
+      <span className="text-[11px] text-slate-500 shrink-0">{label}</span>
+      <span className={`text-[11px] text-right truncate ${mono ? 'font-mono' : ''} ${color ?? 'text-slate-300'}`}>{value}</span>
+    </div>
+  )
+}
+
 export default function NetworkPage() {
   const { data: interfaces = [] } = useSWR<NetworkInterface[]>('/api/network', fetcher, { refreshInterval: 30000 })
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
+  const [selected, setSelected] = useState<NetworkInterface | null>(null)
 
   const filtered = interfaces.filter(n => {
     if (search && !n.hostname.toLowerCase().includes(search.toLowerCase()) && !n.interface.toLowerCase().includes(search.toLowerCase())) return false
@@ -116,7 +126,9 @@ export default function NetworkPage() {
             </thead>
             <tbody>
               {filtered.map(n => (
-                <tr key={n.id} className="border-b border-slate-800/50 hover:bg-slate-800/20">
+                <tr key={n.id}
+                  onClick={() => setSelected(n)}
+                  className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer transition-colors">
                   <td className="p-3">
                     <div className="flex items-center gap-1.5">
                       {n.status !== 'up' && <AlertTriangle size={11} className={n.status === 'down' ? 'text-red-400' : 'text-yellow-400'} />}
@@ -142,9 +154,133 @@ export default function NetworkPage() {
           </table>
         </div>
         <div className="px-3 py-2 border-t border-slate-800 text-[11px] text-slate-600">
-          Showing {filtered.length} of {interfaces.length} interfaces
+          Showing {filtered.length} of {interfaces.length} interfaces · Click a row for details
         </div>
       </div>
+
+      {/* Detail drawer */}
+      {selected && (() => {
+        const linkMbps = selected.speedGbps * 1000
+        const rxPct = Math.min(100, (selected.rxMbps / linkMbps) * 100)
+        const txPct = Math.min(100, (selected.txMbps / linkMbps) * 100)
+        const totalErrors = selected.rxErrors + selected.txErrors
+        const totalDrops = selected.rxDrops + selected.txDrops
+        const utilPct = Math.min(100, ((selected.rxMbps + selected.txMbps) / (linkMbps * 2)) * 100)
+        return (
+          <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setSelected(null)}>
+            <div
+              className="w-full max-w-xs bg-[#0d1117] border-l border-slate-800 h-full overflow-y-auto shadow-2xl flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-start justify-between p-5 border-b border-slate-800">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Network size={15} className="text-orange-400" />
+                    <span className="text-white font-bold text-sm">{selected.hostname}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-400 text-xs font-mono">{selected.interface}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${STATUS_BADGE[selected.status] || ''}`}>{selected.status}</span>
+                  </div>
+                </div>
+                <button onClick={() => setSelected(null)} className="text-slate-500 hover:text-white p-1">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 flex-1">
+                {/* Throughput */}
+                <div className="bg-slate-900 rounded-xl p-4 space-y-3">
+                  <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Throughput</div>
+                  {/* Overall utilisation */}
+                  <div>
+                    <div className="flex justify-between text-[11px] mb-1.5">
+                      <span className="text-slate-500">Link utilisation</span>
+                      <span className={utilPct > 80 ? 'text-red-400' : utilPct > 60 ? 'text-yellow-400' : 'text-slate-300'}>{utilPct.toFixed(1)}%</span>
+                    </div>
+                    <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full transition-all ${utilPct > 80 ? 'bg-red-500' : utilPct > 60 ? 'bg-yellow-500' : 'bg-orange-500'}`}
+                        style={{ width: `${utilPct}%` }} />
+                    </div>
+                  </div>
+                  {/* RX */}
+                  <div>
+                    <div className="flex justify-between text-[11px] mb-1">
+                      <span className="flex items-center gap-1 text-blue-400"><ArrowDown size={10} /> RX</span>
+                      <span className="text-slate-300">{selected.rxMbps.toFixed(1)} Mbps <span className="text-slate-600">({rxPct.toFixed(1)}%)</span></span>
+                    </div>
+                    <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${rxPct}%` }} />
+                    </div>
+                  </div>
+                  {/* TX */}
+                  <div>
+                    <div className="flex justify-between text-[11px] mb-1">
+                      <span className="flex items-center gap-1 text-green-400"><ArrowUp size={10} /> TX</span>
+                      <span className="text-slate-300">{selected.txMbps.toFixed(1)} Mbps <span className="text-slate-600">({txPct.toFixed(1)}%)</span></span>
+                    </div>
+                    <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${txPct}%` }} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Errors & Drops */}
+                <div className="bg-slate-900 rounded-xl p-4 space-y-3">
+                  <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                    <Activity size={10} /> Errors &amp; Drops
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-800/60 rounded-lg p-3">
+                      <div className={`text-base font-bold ${selected.rxErrors > 100 ? 'text-red-400' : selected.rxErrors > 10 ? 'text-yellow-400' : 'text-white'}`}>
+                        {selected.rxErrors}
+                      </div>
+                      <div className="text-[10px] text-slate-500">RX Errors</div>
+                    </div>
+                    <div className="bg-slate-800/60 rounded-lg p-3">
+                      <div className={`text-base font-bold ${selected.txErrors > 100 ? 'text-red-400' : selected.txErrors > 10 ? 'text-yellow-400' : 'text-white'}`}>
+                        {selected.txErrors}
+                      </div>
+                      <div className="text-[10px] text-slate-500">TX Errors</div>
+                    </div>
+                    <div className="bg-slate-800/60 rounded-lg p-3">
+                      <div className={`text-base font-bold ${selected.rxDrops > 50 ? 'text-red-400' : selected.rxDrops > 10 ? 'text-yellow-400' : 'text-white'}`}>
+                        {selected.rxDrops}
+                      </div>
+                      <div className="text-[10px] text-slate-500">RX Drops</div>
+                    </div>
+                    <div className="bg-slate-800/60 rounded-lg p-3">
+                      <div className={`text-base font-bold ${selected.txDrops > 50 ? 'text-red-400' : selected.txDrops > 10 ? 'text-yellow-400' : 'text-white'}`}>
+                        {selected.txDrops}
+                      </div>
+                      <div className="text-[10px] text-slate-500">TX Drops</div>
+                    </div>
+                  </div>
+                  {(totalErrors > 0 || totalDrops > 0) && (
+                    <div className="text-[10px] text-slate-600 pt-1">
+                      Total: {totalErrors} errors · {totalDrops} drops
+                    </div>
+                  )}
+                </div>
+
+                {/* Interface details */}
+                <div className="bg-slate-900 rounded-xl p-4 space-y-2">
+                  <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                    <Cpu size={10} /> Interface Details
+                  </div>
+                  <InfoRow label="Speed" value={selected.speedGbps >= 1 ? `${selected.speedGbps} Gbps` : `${selected.speedGbps * 1000} Mbps`} />
+                  <InfoRow label="Duplex" value={selected.duplex ?? 'N/A'} />
+                  <InfoRow label="MTU" value={selected.mtu != null ? `${selected.mtu} bytes` : 'N/A'} />
+                  <InfoRow label="Operstate" value={selected.operstate ?? selected.status} />
+                  {selected.macAddress && <InfoRow label="MAC" value={selected.macAddress} mono />}
+                  <InfoRow label="Rack" value={selected.rack} />
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
