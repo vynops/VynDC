@@ -39,6 +39,15 @@ async function liveNetwork(): Promise<NetworkInterface[]> {
     const info = (nicInfo as typeof rxBytes).find(x => x.metric.instance === instance && x.metric.device === device)
     const mtuEntry = (mtuData as typeof rxBytes).find(x => x.metric.instance === instance && x.metric.device === device)
     const ip = instance.split(':')[0]
+    const operstate = info?.metric.operstate
+
+    const rxMbps = Math.round(parseFloat(r.value[1]) * 10) / 10
+    const txMbps = Math.round(parseFloat(key(txBytes)?.value[1] ?? '0') * 10) / 10
+
+    // VXLAN/tunnel interfaces (flannel, wireguard, etc.) have no physical carrier
+    // so node_network_up returns 0, but operstate="unknown" means functionally active.
+    // Do NOT use traffic (rxMbps > 0) as a signal — rate metrics lag up to 2min after link loss.
+    const effectivelyUp = up || operstate === 'unknown'
 
     ifaces.push({
       id: `nic-${++idx}`,
@@ -47,15 +56,15 @@ async function liveNetwork(): Promise<NetworkInterface[]> {
       rack: 'rack-1',
       interface: device,
       speedGbps: speedBps > 0 ? speedBps / 1e9 : 1,
-      rxMbps: Math.round(parseFloat(r.value[1]) * 10) / 10,
-      txMbps: Math.round(parseFloat(key(txBytes)?.value[1] ?? '0') * 10) / 10,
+      rxMbps,
+      txMbps,
       rxErrors: Math.round(parseFloat(key(rxErr)?.value[1] ?? '0')),
       txErrors: Math.round(parseFloat(key(txErr)?.value[1] ?? '0')),
       rxDrops: Math.round(parseFloat(key(rxDrop)?.value[1] ?? '0')),
       txDrops: Math.round(parseFloat(key(txDrop)?.value[1] ?? '0')),
-      status: up ? 'up' : 'down',
+      status: effectivelyUp ? 'up' : 'down',
       duplex: info?.metric.duplex,
-      operstate: info?.metric.operstate,
+      operstate,
       macAddress: info?.metric.address,
       mtu: mtuEntry ? Math.round(parseFloat(mtuEntry.value[1])) : undefined,
     })
