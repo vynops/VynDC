@@ -76,17 +76,19 @@ export default function CopilotPage() {
               <h3 className="text-sm font-bold text-white mb-1">VynDC AI Copilot</h3>
               <p className="text-xs text-slate-500 max-w-sm mx-auto">Ask anything about your datacenter — servers, incidents, predictions, power, or storage.</p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {STARTER_QUESTIONS.map((q, i) => (
-                <button key={i} onClick={() => sendMessage(q.text)}
-                  className="flex items-start gap-3 p-3 rounded-xl bg-[#111827] border border-slate-800/60 hover:border-slate-700 text-left transition-colors group">
-                  <q.icon size={14} className={`${q.color} mt-0.5 shrink-0`} />
-                  <span className="text-xs text-slate-400 group-hover:text-slate-300">{q.text}</span>
-                </button>
-              ))}
-            </div>
           </div>
         )}
+
+        {/* Starter prompts — always visible */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {STARTER_QUESTIONS.map((q, i) => (
+            <button key={i} onClick={() => sendMessage(q.text)} disabled={loading}
+              className="flex items-start gap-3 p-3 rounded-xl bg-[#111827] border border-slate-800/60 hover:border-slate-700 text-left transition-colors group disabled:opacity-40">
+              <q.icon size={14} className={`${q.color} mt-0.5 shrink-0`} />
+              <span className="text-xs text-slate-400 group-hover:text-slate-300">{q.text}</span>
+            </button>
+          ))}
+        </div>
 
         {messages.map((msg, i) => (
           <div key={i} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
