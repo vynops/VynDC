@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import useSWR from 'swr'
-import { Save, Eye, EyeOff, RefreshCw, Brain, Bell, Database, Settings as SettingsIcon, Mail, Server, GitBranch } from 'lucide-react'
+import { Save, Eye, EyeOff, RefreshCw, Brain, Bell, Database, Settings as SettingsIcon, Mail, Server, GitBranch, Send, CheckCircle, XCircle } from 'lucide-react'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -51,6 +51,33 @@ export default function SettingsPage() {
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [testTo, setTestTo] = useState('')
+  const [testStatus, setTestStatus] = useState<'idle'|'sending'|'ok'|'error'>('idle')
+  const [testMsg, setTestMsg] = useState('')
+
+  async function sendTestEmail() {
+    setTestStatus('sending'); setTestMsg('')
+    try {
+      const res = await fetch('/api/settings/test-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: testTo.trim() || undefined,
+          smtpHost: form?.smtpHost,
+          smtpPort: form?.smtpPort,
+          smtpUser: form?.smtpUser,
+          smtpPassword: form?.smtpPassword,
+          smtpFrom: form?.smtpFrom,
+        }),
+      })
+      const json = await res.json()
+      if (res.ok) { setTestStatus('ok'); setTestMsg(`Sent to ${json.to}`) }
+      else { setTestStatus('error'); setTestMsg(json.error ?? 'Unknown error') }
+    } catch (e) {
+      setTestStatus('error'); setTestMsg(e instanceof Error ? e.message : 'Network error')
+    }
+    setTimeout(() => setTestStatus('idle'), 8000)
+  }
 
   useEffect(() => { if (settings && !form) setForm(settings) }, [settings])
 
@@ -171,6 +198,41 @@ export default function SettingsPage() {
         <Field label="From Address" hint="Sender address shown in alert emails">
           <input value={form.smtpFrom} onChange={e => update('smtpFrom', e.target.value)} placeholder="VynDC Alerts <alerts@example.com>"
             className="settings-input" />
+        </Field>
+        <Field label="Send Test Email" hint="Verifies SMTP connection and sends a test message">
+          <div className="flex flex-col gap-2">
+            <div className="flex gap-2">
+              <input
+                value={testTo}
+                onChange={e => setTestTo(e.target.value)}
+                placeholder={form.alertRecipients?.split(',')[0]?.trim() || form.smtpUser || 'you@example.com'}
+                className="settings-input flex-1"
+                type="email"
+              />
+              <button
+                onClick={sendTestEmail}
+                disabled={testStatus === 'sending' || !form.smtpHost}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-400 text-xs font-medium hover:bg-blue-500/25 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+              >
+                <Send size={11} />
+                {testStatus === 'sending' ? 'Sending…' : 'Send Test'}
+              </button>
+            </div>
+            {testStatus === 'ok' && (
+              <div className="flex items-center gap-1.5 text-xs text-green-400">
+                <CheckCircle size={12} /> {testMsg}
+              </div>
+            )}
+            {testStatus === 'error' && (
+              <div className="flex items-start gap-1.5 text-xs text-red-400">
+                <XCircle size={12} className="shrink-0 mt-0.5" />
+                <span className="break-all">{testMsg}</span>
+              </div>
+            )}
+            {!form.smtpHost && (
+              <div className="text-[10px] text-slate-600">Configure SMTP Host above and save first.</div>
+            )}
+          </div>
         </Field>
       </Section>
 
