@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import useSWR from 'swr'
-import { Save, Eye, EyeOff, RefreshCw, Brain, Bell, Database, Settings as SettingsIcon, Mail, Server, GitBranch, Send, CheckCircle, XCircle } from 'lucide-react'
+import { Save, Eye, EyeOff, RefreshCw, Brain, Bell, Database, Settings as SettingsIcon, Mail, Server, GitBranch, Send, CheckCircle, XCircle, Shield } from 'lucide-react'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -44,9 +44,33 @@ interface AppSettings {
   defaultRefreshInterval: number
 }
 
+interface AuditEntry {
+  ts: string
+  actor: string
+  action: string
+  detail: string
+  ip: string
+}
+
+const ACTION_COLOR: Record<string, string> = {
+  'login.success':    'text-green-400',
+  'login.fail':       'text-red-400',
+  'login.rate_limited': 'text-red-500',
+  'logout':           'text-slate-400',
+  'settings.update':  'text-blue-400',
+  'user.create':      'text-cyan-400',
+  'user.update':      'text-yellow-400',
+  'user.delete':      'text-red-400',
+  'incident.resolve': 'text-green-400',
+  'incident.acknowledge': 'text-yellow-400',
+  'incident.assign':  'text-blue-400',
+  'incident.update':  'text-slate-400',
+}
+
 export default function SettingsPage() {
   const { data: settings, mutate } = useSWR<AppSettings>('/api/settings', fetcher)
   const { data: usage, mutate: refreshUsage } = useSWR('/api/copilot/usage', fetcher, { refreshInterval: 30000 })
+  const { data: auditLog = [], mutate: refreshAudit } = useSWR<AuditEntry[]>('/api/audit?limit=100', fetcher, { refreshInterval: 60000 })
   const [form, setForm] = useState<AppSettings | null>(null)
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -97,13 +121,22 @@ export default function SettingsPage() {
 
   if (!form) return <div className="p-6 text-slate-500 text-sm">Loading...</div>
 
+  const isLive = !!(form.prometheusUrl || form.alertmanagerUrl)
+
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-2xl mx-auto">
-      {/* Demo banner */}
-      <div className="bg-blue-500/10 border border-blue-500/30 rounded-2xl px-4 py-3 flex items-center gap-2 text-xs text-blue-400">
-        <Database size={13} />
-        <strong>Demo Mode</strong> — Using simulated datacenter data. Connect Prometheus, SNMP or IPMI in Infrastructure settings for live data.
-      </div>
+      {/* Status banner */}
+      {isLive ? (
+        <div className="bg-green-500/10 border border-green-500/30 rounded-2xl px-4 py-3 flex items-center gap-2 text-xs text-green-400">
+          <Database size={13} />
+          <strong>Live Mode</strong> — Connected to real data sources. Prometheus and Alertmanager are configured.
+        </div>
+      ) : (
+        <div className="bg-blue-500/10 border border-blue-500/30 rounded-2xl px-4 py-3 flex items-center gap-2 text-xs text-blue-400">
+          <Database size={13} />
+          <strong>Demo Mode</strong> — Using simulated datacenter data. Connect Prometheus, SNMP or IPMI in Infrastructure settings for live data.
+        </div>
+      )}
 
       {/* Infrastructure */}
       <Section icon={Database} title="Infrastructure" subtitle="Data source connections">
@@ -287,6 +320,32 @@ export default function SettingsPage() {
           <input type="number" value={form.defaultRefreshInterval} onChange={e => update('defaultRefreshInterval', +e.target.value)}
             className="settings-input w-24" min={5} max={300} step={5} />
         </Field>
+      </Section>
+
+      {/* Audit Log */}
+      <Section icon={Shield} title="Audit Log" subtitle="Who did what, and when (last 100 entries)">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[11px] text-slate-500">{auditLog.length} entries</span>
+          <button onClick={() => refreshAudit()} className="text-slate-600 hover:text-slate-400 flex items-center gap-1 text-[11px]">
+            <RefreshCw size={11} /> Refresh
+          </button>
+        </div>
+        {auditLog.length === 0
+          ? <div className="text-xs text-slate-600 text-center py-4">No audit entries yet — actions will appear here.</div>
+          : <div className="space-y-1 max-h-96 overflow-y-auto pr-1">
+            {auditLog.map((e, i) => (
+              <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-slate-900/50 text-[11px]">
+                <span className="text-slate-600 shrink-0 w-32 truncate" title={e.ts}>
+                  {new Date(e.ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+                <span className={`shrink-0 w-36 font-mono truncate ${ACTION_COLOR[e.action] ?? 'text-slate-400'}`}>{e.action}</span>
+                <span className="text-slate-300 flex-1 truncate" title={e.detail}>{e.detail}</span>
+                <span className="text-slate-600 shrink-0 hidden sm:block">{e.actor}</span>
+                <span className="text-slate-700 shrink-0 hidden lg:block">{e.ip}</span>
+              </div>
+            ))}
+          </div>
+        }
       </Section>
 
       {/* Save */}

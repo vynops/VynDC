@@ -1,7 +1,7 @@
 'use client'
 import useSWR from 'swr'
 import { LayoutDashboard, Server, AlertTriangle, Brain, Zap, HardDrive, TrendingUp, Activity } from 'lucide-react'
-import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
 import type { OverviewMetrics, Incident, Prediction } from '@/lib/simulation'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
@@ -101,6 +101,37 @@ export default function OverviewPage() {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* CPU & Memory 7-Day Trend */}
+      {overview.cpuTrend7d && overview.cpuTrend7d.length > 0 && (
+        <div className="bg-[#111827] border border-slate-800/60 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Activity size={14} className="text-cyan-400" />
+              <h3 className="text-sm font-bold text-white">CPU &amp; Memory — 7 Day Trend</h3>
+            </div>
+            <a href="/servers" className="text-[11px] text-orange-400 hover:text-orange-300">View servers →</a>
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={overview.cpuTrend7d} margin={{ top: 0, right: 8, left: -20, bottom: 0 }}>
+              <defs>
+                <linearGradient id="gCpu" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#06b6d4" stopOpacity={0.2} /><stop offset="95%" stopColor="#06b6d4" stopOpacity={0} /></linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="time" tick={{ fontSize: 9, fill: '#64748b' }} tickFormatter={t => t.slice(6, 11)} interval={11} />
+              <YAxis tick={{ fontSize: 10, fill: '#64748b' }} domain={[0, 100]} unit="%" />
+              <Tooltip
+                contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 11 }}
+                formatter={(v: number, name: string) => [`${v}%`, name === 'cpu' ? 'CPU' : 'Memory']}
+                labelFormatter={l => `Time: ${l}`}
+              />
+              <Legend formatter={(v) => v === 'cpu' ? 'CPU %' : 'Memory %'} wrapperStyle={{ fontSize: 11 }} />
+              <Line type="monotone" dataKey="cpu" stroke="#06b6d4" strokeWidth={1.5} dot={false} />
+              <Line type="monotone" dataKey="mem" stroke="#a855f7" strokeWidth={1.5} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {/* Bottom Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

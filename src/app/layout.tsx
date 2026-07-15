@@ -10,6 +10,7 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "VynDC - VynOps Suite",
   description: "Intelligent datacenter monitoring, incident management, and AI-powered operations for modern infrastructure.",
+  icons: { icon: '/favicon-circle.png', shortcut: '/favicon-circle.png', apple: '/favicon-circle.png' },
 };
 
 export default function RootLayout({

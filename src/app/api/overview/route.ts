@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth'
 import { simulatedOverview } from '@/lib/simulation'
-import { isPrometheusConfigured, isAlertmanagerConfigured, promQuery, alertmanagerAlerts } from '@/lib/prometheus'
+import { isPrometheusConfigured, isAlertmanagerConfigured, promQuery, promQueryRange, alertmanagerAlerts } from '@/lib/prometheus'
 import type { OverviewMetrics } from '@/lib/simulation'
 
 async function liveOverview(): Promise<OverviewMetrics> {
-  const [cpuIdle, memTotal, memAvail, diskTotal, diskAvail, load1] = await Promise.all([
+  const now = Math.floor(Date.now() / 1000)
+  const sevenDaysAgo = now - 7 * 24 * 3600
+
+  const [cpuIdle, memTotal, memAvail, diskTotal, diskAvail, load1, cpuRange, memRange] = await Promise.all([
     promQuery('avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100'),
     promQuery('node_memory_MemTotal_bytes'),
     promQuery('node_memory_MemAvailable_bytes'),
     promQuery('node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}'),
     promQuery('node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}'),
     promQuery('node_load1'),
+    promQueryRange('avg(100 - (rate(node_cpu_seconds_total{mode="idle"}[5m]) * 100))', sevenDaysAgo, now, '1h'),
+    promQueryRange('avg(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100', sevenDaysAgo, now, '1h'),
   ])
 
   const instances = [...new Set(memTotal.map(r => r.metric.instance))].filter(Boolean)
@@ -43,6 +48,18 @@ async function liveOverview(): Promise<OverviewMetrics> {
   }
 
   const sim = simulatedOverview()
+
+  // Build 7-day CPU + memory trend from Prometheus range data
+  const cpuTrend7d = (cpuRange[0]?.values ?? []).map(([ts, cpuVal]) => {
+    const memPoint = memRange[0]?.values.find(([mt]) => mt === ts)
+    const d = new Date((ts as number) * 1000)
+    return {
+      time: `${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')} ${String(d.getUTCHours()).padStart(2, '0')}:00`,
+      cpu: Math.round(parseFloat(cpuVal as string) * 10) / 10,
+      mem: memPoint ? Math.round(parseFloat(memPoint[1] as string) * 10) / 10 : 0,
+    }
+  })
+
   return {
     ...sim,
     totalServers: total,
@@ -53,6 +70,7 @@ async function liveOverview(): Promise<OverviewMetrics> {
     storageUsedPct,
     openIncidents,
     criticalIncidents,
+    cpuTrend7d,
   }
 }
 

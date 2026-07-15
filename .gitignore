@@ -4,3 +4,15 @@ node_modules/
 data/seen-alerts.json
 data/dispatch-lock.json
 data/settings.json
+
+# Runtime application data
+data/users.json
+data/audit-log.json
+data/copilot-usage.json
+data/incident-history.json
+data/incidents.json
+
+# Editor / temporary backup files
+*-
+*.ts1
+*.tsx1

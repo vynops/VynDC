@@ -150,6 +150,7 @@ export interface OverviewMetrics {
   networkUtilPct: number
   incidentTrend: { date: string; critical: number; high: number; medium: number }[]
   serverStatusHistory: { hour: string; healthy: number; warning: number; critical: number }[]
+  cpuTrend7d: { time: string; cpu: number; mem: number }[]
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -564,6 +565,15 @@ export function simulatedOverview(): OverviewMetrics {
     critical: int(0, 2, rng),
   }))
 
+  const cpuTrend7d = Array.from({ length: 7 * 24 }, (_, i) => {
+    const d = new Date(Date.now() - (7 * 24 - i) * 3600 * 1000)
+    return {
+      time: `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:00`,
+      cpu: Math.round((20 + rng() * 30) * 10) / 10,
+      mem: Math.round((40 + rng() * 20) * 10) / 10,
+    }
+  })
+
   return {
     totalServers: servers.length,
     healthyServers: healthy,
@@ -581,5 +591,6 @@ export function simulatedOverview(): OverviewMetrics {
     networkUtilPct,
     incidentTrend,
     serverStatusHistory,
+    cpuTrend7d,
   }
 }

@@ -5,14 +5,21 @@ import type { Incident } from '@/lib/simulation'
 import { isAlertmanagerConfigured, alertmanagerAlerts } from '@/lib/prometheus'
 import { dispatchAlerts } from '@/lib/alert-dispatcher'
 import { sendSlack } from '@/lib/notifier'
+import { writeAudit, getClientIp } from '@/lib/audit'
 import fs from 'fs'
 import path from 'path'
 
-const DATA_FILE = path.join(process.cwd(), 'data', 'incidents.json')
+const DATA_FILE    = path.join(process.cwd(), 'data', 'incidents.json')
+const HISTORY_FILE = path.join(process.cwd(), 'data', 'incident-history.json')
 
 function loadOverrides(): Record<string, Partial<Incident>> {
   if (!fs.existsSync(DATA_FILE)) return {}
   try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) } catch { return {} }
+}
+
+function loadHistory(): Incident[] {
+  if (!fs.existsSync(HISTORY_FILE)) return []
+  try { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) } catch { return [] }
 }
 
 function saveOverrides(o: Record<string, Partial<Incident>>) {
@@ -45,7 +52,10 @@ export async function GET(req: NextRequest) {
         ...overrides[a.fingerprint],
       }))
       dispatchAlerts(liveIncidents)
-      return NextResponse.json(liveIncidents)
+      // Merge in resolved history (last 50) not already in live list
+      const liveIds = new Set(liveIncidents.map(i => i.id))
+      const history = loadHistory().filter(h => !liveIds.has(h.id)).slice(0, 50)
+      return NextResponse.json([...liveIncidents, ...history])
     } catch (e) {
       console.error('[incidents] Alertmanager error, falling back:', e)
     }
@@ -84,6 +94,16 @@ export async function PATCH(req: NextRequest) {
     }
 
     saveOverrides(overrides)
+
+    const auditActor = typeof auth === 'object' && 'email' in auth ? (auth as { email: string }).email : 'unknown'
+    const actionLabel = status === 'resolved' ? 'incident.resolve'
+      : status === 'acknowledged' ? 'incident.acknowledge'
+      : assignTo !== undefined ? 'incident.assign'
+      : 'incident.update'
+    const detail = status
+      ? `${_title ?? id} → ${status}${assignTo !== undefined ? ` (assigned: ${assignTo || 'unassigned'})` : ''}`
+      : `${_title ?? id} assigned to ${assignTo || 'unassigned'}`
+    writeAudit({ actor: auditActor, action: actionLabel, detail, ip: getClientIp(req) })
 
     // Slack notification on assignment
     const effectiveAssignee = assignTo ?? (status && status !== 'open' ? actor : undefined)

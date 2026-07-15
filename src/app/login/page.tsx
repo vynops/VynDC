@@ -107,13 +107,11 @@ export default function LoginPage() {
         </div>
 
         {/* Family footer */}
-        <div className="mt-6 flex items-center justify-center">
-          <p className="text-xs text-slate-600 tracking-widest uppercase">
-            Part of the{' '}
-            <a href="https://vynops.com" target="_blank" rel="noopener noreferrer"
-              className="text-slate-400 hover:text-white transition-colors">VynOps Suite</a>
-          </p>
-        </div>
+        <p className="text-center text-xs text-slate-600 mt-4">
+          Part of the{' '}
+          <a href="https://vynops.com" target="_blank" rel="noopener noreferrer"
+            className="text-orange-500 hover:text-orange-400 transition-colors">VynOps Suite</a>
+        </p>
       </div>
     </div>
   )

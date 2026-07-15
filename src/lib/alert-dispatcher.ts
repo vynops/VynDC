@@ -28,7 +28,27 @@ import path from 'path'
 /** Minimum seconds between dispatch runs (prevents duplicate floods from concurrent polls) */
 const COOLDOWN_SECONDS = 55
 
-const LOCK_FILE = path.join(process.cwd(), 'data', 'dispatch-lock.json')
+const LOCK_FILE    = path.join(process.cwd(), 'data', 'dispatch-lock.json')
+const HISTORY_FILE = path.join(process.cwd(), 'data', 'incident-history.json')
+
+/** Append a resolved incident to incident-history.json (max 500 records) */
+function appendToHistory(inc: Incident): void {
+  try {
+    const dir = path.dirname(HISTORY_FILE)
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    let history: Incident[] = []
+    if (fs.existsSync(HISTORY_FILE)) {
+      try { history = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) } catch { history = [] }
+    }
+    if (!history.find(h => h.id === inc.id)) {
+      history.unshift({ ...inc, status: 'resolved', resolvedAt: inc.resolvedAt ?? new Date().toISOString() })
+      if (history.length > 500) history = history.slice(0, 500)
+      fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8')
+    }
+  } catch (e) {
+    console.error('[dispatcher] history write error:', e)
+  }
+}
 
 function readLock(): number {
   try {
@@ -73,8 +93,9 @@ export function dispatchAlerts(incidents: Incident[]): void {
     .split(',').map(s => s.trim()).filter(Boolean)
 
   for (const inc of incidents) {
-    // Clean up resolved
+    // Clean up resolved — persist to history first
     if (inc.status === 'resolved') {
+      if (seen[inc.id]) appendToHistory(inc)
       delete seen[inc.id]
       continue
     }

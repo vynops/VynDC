@@ -25,11 +25,11 @@ async function livePredictions(): Promise<Prediction[]> {
     memTotal,
     memAvail,
   ] = await Promise.all([
-    promQuery(`predict_linear(node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}[6h], ${secsAhead})`),
+    promQuery(`predict_linear(node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}[7d], ${secsAhead})`),
     promQuery('node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}'),
     promQuery('node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}'),
-    promQuery('avg_over_time(rate(node_cpu_seconds_total{mode!="idle"}[5m])[6h:5m]) * 100'),
-    promQuery('avg_over_time((1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)[6h:5m]) * 100'),
+    promQuery('avg_over_time(rate(node_cpu_seconds_total{mode!="idle"}[5m])[7d:1h]) * 100'),
+    promQuery('avg_over_time((1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)[7d:1h]) * 100'),
     promQuery('node_hwmon_temp_celsius{sensor="temp1"}'),
     promQuery('node_memory_MemTotal_bytes'),
     promQuery('node_memory_MemAvailable_bytes'),
@@ -81,7 +81,7 @@ async function livePredictions(): Promise<Prediction[]> {
         component: 'cpu',
         confidence: Math.min(90, Math.round(avgCpu)),
         estimatedDaysToFailure: avgCpu > 95 ? 1 : avgCpu > 90 ? 3 : 7,
-        reason: `CPU averaging ${Math.round(avgCpu)}% over last 6h — sustained saturation risk`,
+        reason: `CPU averaging ${Math.round(avgCpu)}% over last 7d — sustained saturation risk`,
         severity: avgCpu > 95 ? 'critical' : avgCpu > 90 ? 'high' : 'medium',
         createdAt: new Date().toISOString(),
       })
@@ -102,7 +102,7 @@ async function livePredictions(): Promise<Prediction[]> {
         component: 'memory',
         confidence: Math.min(90, Math.round(avgMemPct)),
         estimatedDaysToFailure: avgMemPct > 95 ? 1 : avgMemPct > 92 ? 2 : 5,
-        reason: `Memory usage averaging ${Math.round(avgMemPct)}% over last 6h — OOM risk`,
+        reason: `Memory usage averaging ${Math.round(avgMemPct)}% over last 7d — OOM risk`,
         severity: avgMemPct > 95 ? 'critical' : avgMemPct > 92 ? 'high' : 'medium',
         createdAt: new Date().toISOString(),
       })
