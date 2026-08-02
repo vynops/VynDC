@@ -6,27 +6,46 @@ import { isPrometheusConfigured, promQuery, promQueryRange } from '@/lib/prometh
 import { getSettings } from '@/lib/settings-store'
 
 // ── SNMP PDU query (real hardware) ───────────────────────────────────────────
-// APC MIB OID for per-outlet load in tenths-of-amps: .1.3.6.1.4.1.318.1.1.12.3.5.1.1.2
-// We use net-snmp via a child process only if snmpPduHost is set.
-async function snmpOutletWatts(host: string, community: string): Promise<number[]> {
+// Per-outlet metering OIDs are vendor-specific (each vendor uses its own private
+// enterprise MIB). These are commonly-seen defaults for popular metered PDU
+// lines — exact sub-OID/table index can still vary by model & firmware, so
+// Settings → Infrastructure allows an manual OID override when the default
+// doesn't match a customer's specific hardware.
+type PduUnit = 'tenthAmps120v' | 'watts' | 'tenthWatts'
+const VENDOR_OID_DEFAULTS: Record<string, { oid: string; unit: PduUnit; label: string }> = {
+  apc:        { oid: '1.3.6.1.4.1.318.1.1.12.3.5.1.1.2',   unit: 'tenthAmps120v', label: 'APC (PowerNet-MIB rPDU outlet current)' },
+  raritan:    { oid: '1.3.6.1.4.1.13742.6.5.4.3.1.4',      unit: 'watts',         label: 'Raritan (PDU2-MIB outlet active power)' },
+  vertiv:     { oid: '1.3.6.1.4.1.21239.5.2.9.1.4.1.4',    unit: 'watts',         label: 'Vertiv/Geist (rPDU outlet active power)' },
+  eaton:      { oid: '1.3.6.1.4.1.534.6.6.7.6.6.1.2',      unit: 'tenthAmps120v', label: 'Eaton ePDU (outlet current)' },
+  servertech: { oid: '1.3.6.1.4.1.1718.3.2.3.1.9',         unit: 'tenthAmps120v', label: 'Server Technology Sentry (outlet current)' },
+  generic:    { oid: '1.3.6.1.4.1.318.1.1.12.3.5.1.1.2',   unit: 'tenthAmps120v', label: 'Generic (falls back to APC OID — override recommended)' },
+}
+
+function toWatts(raw: number, unit: PduUnit): number {
+  if (unit === 'watts') return Math.round(raw)
+  if (unit === 'tenthWatts') return Math.round(raw / 10)
+  return Math.round((raw / 10) * 120) // tenths-of-amps × 120V
+}
+
+async function snmpOutletWatts(
+  host: string, community: string, vendor: string, oidOverride: string,
+): Promise<{ watts: number[]; source: string }> {
+  const vendorCfg = VENDOR_OID_DEFAULTS[vendor] ?? VENDOR_OID_DEFAULTS.generic
+  const oid = oidOverride?.trim() || vendorCfg.oid
+  const unit = oidOverride?.trim() ? 'watts' : vendorCfg.unit // custom OIDs assumed to report watts unless documented otherwise
+
   const { execFile } = await import('child_process')
   const { promisify } = await import('util')
   const exec = promisify(execFile)
   try {
-    // snmpwalk the APC outlet current OID, parse tenths-of-amps → watts (assume 120V)
-    const { stdout } = await exec('snmpwalk', [
-      '-v2c', `-c${community}`, host,
-      '1.3.6.1.4.1.318.1.1.12.3.5.1.1.2',
-    ], { timeout: 5000 })
-    return stdout.split('\n')
+    const { stdout } = await exec('snmpwalk', ['-v2c', `-c${community}`, host, oid], { timeout: 5000 })
+    const watts = stdout.split('\n')
       .filter(l => l.includes('INTEGER'))
-      .map(l => {
-        const tenthAmps = parseInt(l.split('INTEGER:')[1]?.trim() ?? '0', 10)
-        return Math.round((tenthAmps / 10) * 120) // tenths-of-amps × 120V = watts
-      })
+      .map(l => toWatts(parseInt(l.split('INTEGER:')[1]?.trim() ?? '0', 10), unit as PduUnit))
       .filter(w => w > 0)
+    return { watts, source: oidOverride?.trim() ? 'custom OID' : vendorCfg.label }
   } catch {
-    return []
+    return { watts: [], source: oidOverride?.trim() ? 'custom OID' : vendorCfg.label }
   }
 }
 
@@ -34,7 +53,7 @@ async function snmpOutletWatts(host: string, community: string): Promise<number[
 // Typical cloud vCPU TDP: ~5-8W per core at full load
 const WATTS_PER_VCPU_FULL = 6
 
-async function livePower(): Promise<PowerMetrics & { isEstimated: boolean }> {
+async function livePower(): Promise<PowerMetrics & { isEstimated: boolean; pduWarning?: string }> {
   const settings = getSettings()
   const costPerKwh = 0.12 // USD — reasonable default, could be a future setting
 
@@ -63,12 +82,17 @@ async function livePower(): Promise<PowerMetrics & { isEstimated: boolean }> {
 
   // Try SNMP PDU if configured — overrides estimate
   let isEstimated = true
-  let pduWatts: number[] = []
+  let pduWarning: string | undefined
   if (settings.snmpPduHost) {
-    pduWatts = await snmpOutletWatts(settings.snmpPduHost, settings.snmpCommunity || 'public')
-    if (pduWatts.length > 0) {
-      itLoadW = pduWatts.reduce((a, b) => a + b, 0)
+    const { watts, source } = await snmpOutletWatts(
+      settings.snmpPduHost, settings.snmpCommunity || 'public',
+      settings.pduVendor || 'apc', settings.pduOutletOid || '',
+    )
+    if (watts.length > 0) {
+      itLoadW = watts.reduce((a, b) => a + b, 0)
       isEstimated = false
+    } else {
+      pduWarning = `PDU at ${settings.snmpPduHost} did not return outlet data via ${source} — check the vendor selection or set a custom OID override in Settings → Infrastructure. Falling back to CPU-based estimate.`
     }
   }
 
@@ -123,6 +147,7 @@ async function livePower(): Promise<PowerMetrics & { isEstimated: boolean }> {
     rackPower,
     hourlyTrend,
     isEstimated,
+    pduWarning,
   }
 }
 
@@ -140,3 +165,4 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({ ...simulatedPower(), isEstimated: false })
 }
+

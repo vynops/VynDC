@@ -54,14 +54,15 @@ export function getUsageToday(): DayUsage {
   return store[today()] ?? { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 }
 }
 
-export function getUsageLast7Days(): Array<{ date: string } & DayUsage> {
+export function getUsageAllTime(): DayUsage {
   const store = read()
-  const result = []
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date()
-    d.setDate(d.getDate() - i)
-    const key = d.toISOString().slice(0, 10)
-    result.push({ date: key, ...(store[key] ?? { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 }) })
-  }
-  return result
+  return Object.values(store).reduce<DayUsage>(
+    (acc, day) => ({
+      requests: acc.requests + day.requests,
+      promptTokens: acc.promptTokens + day.promptTokens,
+      completionTokens: acc.completionTokens + day.completionTokens,
+      totalTokens: acc.totalTokens + day.totalTokens,
+    }),
+    { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+  )
 }

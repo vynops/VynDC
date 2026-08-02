@@ -1,0 +1,26 @@
+[
+  {
+    "id": "1785663859691-8f6jdz",
+    "userId": "af53d698-f489-481a-a0e8-d11a2ab57a22",
+    "prompt": "Summarise the current incidents and recommended actions",
+    "createdAt": "2026-08-02T09:44:19.691Z"
+  },
+  {
+    "id": "1785663850152-nsvay3",
+    "userId": "af53d698-f489-481a-a0e8-d11a2ab57a22",
+    "prompt": "Show storage capacity forecast for the next 30 days",
+    "createdAt": "2026-08-02T09:44:10.152Z"
+  },
+  {
+    "id": "1785663834464-jjb30c",
+    "userId": "af53d698-f489-481a-a0e8-d11a2ab57a22",
+    "prompt": "Which servers are at risk of failure?",
+    "createdAt": "2026-08-02T09:43:54.464Z"
+  },
+  {
+    "id": "1785587084856-2tk8k0",
+    "userId": "af53d698-f489-481a-a0e8-d11a2ab57a22",
+    "prompt": "Which servers are at risk of failure?",
+    "createdAt": "2026-08-01T12:24:44.856Z"
+  }
+]

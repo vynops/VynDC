@@ -19,6 +19,8 @@ interface AppSettings {
   alertmanagerUrl: string
   snmpCommunity: string
   snmpPduHost: string
+  pduVendor: 'apc' | 'raritan' | 'vertiv' | 'eaton' | 'servertech' | 'generic'
+  pduOutletOid: string
   ipmiDefaultUser: string
   ipmiDefaultPassword: string
   rackTopologyFile: string
@@ -78,6 +80,25 @@ export default function SettingsPage() {
   const [testTo, setTestTo] = useState('')
   const [testStatus, setTestStatus] = useState<'idle'|'sending'|'ok'|'error'>('idle')
   const [testMsg, setTestMsg] = useState('')
+  const [slackTestStatus, setSlackTestStatus] = useState<'idle'|'sending'|'ok'|'error'>('idle')
+  const [slackTestMsg, setSlackTestMsg] = useState('')
+  const [connTest, setConnTest] = useState<Record<string, { status: 'idle'|'testing'|'ok'|'error'; msg: string }>>({})
+
+  async function testConnection(key: string, type: string, params: Record<string, string>) {
+    setConnTest(t => ({ ...t, [key]: { status: 'testing', msg: '' } }))
+    try {
+      const res = await fetch('/api/settings/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, ...params }),
+      })
+      const json = await res.json()
+      setConnTest(t => ({ ...t, [key]: { status: res.ok ? 'ok' : 'error', msg: json.message || json.error || '' } }))
+    } catch (e) {
+      setConnTest(t => ({ ...t, [key]: { status: 'error', msg: e instanceof Error ? e.message : 'Network error' } }))
+    }
+    setTimeout(() => setConnTest(t => ({ ...t, [key]: { status: 'idle', msg: '' } })), 8000)
+  }
 
   async function sendTestEmail() {
     setTestStatus('sending'); setTestMsg('')
@@ -101,6 +122,23 @@ export default function SettingsPage() {
       setTestStatus('error'); setTestMsg(e instanceof Error ? e.message : 'Network error')
     }
     setTimeout(() => setTestStatus('idle'), 8000)
+  }
+
+  async function sendSlackTest() {
+    setSlackTestStatus('sending'); setSlackTestMsg('')
+    try {
+      const res = await fetch('/api/settings/test-slack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhookUrl: form?.slackWebhookUrl }),
+      })
+      const json = await res.json()
+      if (res.ok) { setSlackTestStatus('ok'); setSlackTestMsg(json.message ?? 'Webhook accepted') }
+      else { setSlackTestStatus('error'); setSlackTestMsg(json.error ?? 'Unknown error') }
+    } catch (e) {
+      setSlackTestStatus('error'); setSlackTestMsg(e instanceof Error ? e.message : 'Network error')
+    }
+    setTimeout(() => setSlackTestStatus('idle'), 8000)
   }
 
   useEffect(() => { if (settings && !form) setForm(settings) }, [settings])
@@ -141,24 +179,78 @@ export default function SettingsPage() {
       {/* Infrastructure */}
       <Section icon={Database} title="Infrastructure" subtitle="Data source connections">
         <Field label="Prometheus URL" hint="Covers: Servers, Storage, Network pages">
-          <input value={form.prometheusUrl} onChange={e => update('prometheusUrl', e.target.value)} placeholder="http://prometheus:9090"
-            className="settings-input" />
+          <div className="flex gap-2">
+            <input value={form.prometheusUrl} onChange={e => update('prometheusUrl', e.target.value)} placeholder="http://prometheus:9090"
+              className="settings-input flex-1" />
+            <button
+              onClick={() => testConnection('prometheus', 'prometheus', { url: form.prometheusUrl })}
+              disabled={!form.prometheusUrl || connTest.prometheus?.status === 'testing'}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-700/50 border border-slate-600/40 text-slate-300 text-xs font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            >
+              {connTest.prometheus?.status === 'testing' ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+          {connTest.prometheus?.status === 'ok' && <div className="flex items-center gap-1.5 text-[11px] text-green-400 mt-1"><CheckCircle size={11} />{connTest.prometheus.msg}</div>}
+          {connTest.prometheus?.status === 'error' && <div className="flex items-start gap-1.5 text-[11px] text-red-400 mt-1"><XCircle size={11} className="shrink-0 mt-0.5" /><span>{connTest.prometheus.msg}</span></div>}
+          {!connTest.prometheus?.status || connTest.prometheus.status === 'idle' ? <div className="text-[10px] text-slate-600 mt-1">Health endpoint: <code className="bg-slate-800 text-slate-400 px-1 rounded">/-/healthy</code></div> : null}
         </Field>
         <Field label="Alertmanager URL" hint="Covers: Incidents page — real alerts">
-          <input value={form.alertmanagerUrl} onChange={e => update('alertmanagerUrl', e.target.value)} placeholder="http://alertmanager:9093"
-            className="settings-input" />
+          <div className="flex gap-2">
+            <input value={form.alertmanagerUrl} onChange={e => update('alertmanagerUrl', e.target.value)} placeholder="http://alertmanager:9093"
+              className="settings-input flex-1" />
+            <button
+              onClick={() => testConnection('alertmanager', 'alertmanager', { url: form.alertmanagerUrl })}
+              disabled={!form.alertmanagerUrl || connTest.alertmanager?.status === 'testing'}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-700/50 border border-slate-600/40 text-slate-300 text-xs font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            >
+              {connTest.alertmanager?.status === 'testing' ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+          {connTest.alertmanager?.status === 'ok' && <div className="flex items-center gap-1.5 text-[11px] text-green-400 mt-1"><CheckCircle size={11} />{connTest.alertmanager.msg}</div>}
+          {connTest.alertmanager?.status === 'error' && <div className="flex items-start gap-1.5 text-[11px] text-red-400 mt-1"><XCircle size={11} className="shrink-0 mt-0.5" /><span>{connTest.alertmanager.msg}</span></div>}
+          {!connTest.alertmanager?.status || connTest.alertmanager.status === 'idle' ? <div className="text-[10px] text-slate-600 mt-1">Health endpoint: <code className="bg-slate-800 text-slate-400 px-1 rounded">/-/healthy</code></div> : null}
         </Field>
         <Field label="SNMP Community" hint="Used for network switches & PDUs">
           <input value={form.snmpCommunity} onChange={e => update('snmpCommunity', e.target.value)} placeholder="public"
             className="settings-input" />
+          <div className="text-[10px] text-slate-600 mt-1">Test connectivity: <code className="bg-slate-800 text-slate-300 px-1 rounded">snmpwalk -v2c -c public &lt;host&gt;</code></div>
         </Field>
         <Field label="SNMP PDU Host" hint="Covers: Power page — PDU wattage & outlet data">
-          <input value={form.snmpPduHost} onChange={e => update('snmpPduHost', e.target.value)} placeholder="192.168.1.10"
+          <div className="flex gap-2">
+            <input value={form.snmpPduHost} onChange={e => update('snmpPduHost', e.target.value)} placeholder="192.168.1.10"
+              className="settings-input flex-1" />
+            <button
+              onClick={() => testConnection('snmp', 'snmp', { host: form.snmpPduHost, community: form.snmpCommunity })}
+              disabled={!form.snmpPduHost || connTest.snmp?.status === 'testing'}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-700/50 border border-slate-600/40 text-slate-300 text-xs font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            >
+              {connTest.snmp?.status === 'testing' ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+          {connTest.snmp?.status === 'ok' && <div className="flex items-center gap-1.5 text-[11px] text-green-400 mt-1"><CheckCircle size={11} /><span className="truncate">{connTest.snmp.msg}</span></div>}
+          {connTest.snmp?.status === 'error' && <div className="flex items-start gap-1.5 text-[11px] text-red-400 mt-1"><XCircle size={11} className="shrink-0 mt-0.5" /><span>{connTest.snmp.msg}</span></div>}
+          {!connTest.snmp?.status || connTest.snmp.status === 'idle' ? <div className="text-[10px] text-slate-600 mt-1">Uses community from field above · runs <code className="bg-slate-800 text-slate-400 px-1 rounded">snmpget sysDescr.0</code> server-side</div> : null}
+        </Field>
+        <Field label="PDU Vendor" hint="Selects the default outlet-metering OID for the Power page">
+          <select value={form.pduVendor} onChange={e => update('pduVendor', e.target.value as AppSettings['pduVendor'])}
+            className="settings-input">
+            <option value="apc">APC (Schneider Electric)</option>
+            <option value="raritan">Raritan</option>
+            <option value="vertiv">Vertiv / Geist</option>
+            <option value="eaton">Eaton ePDU</option>
+            <option value="servertech">Server Technology Sentry</option>
+            <option value="generic">Generic / Unknown</option>
+          </select>
+          <div className="text-[10px] text-slate-600 mt-1">Exact OID can vary by model & firmware — use the override below if outlet data doesn&apos;t appear.</div>
+        </Field>
+        <Field label="PDU Outlet OID (override)" hint="Optional — paste the exact OID from your PDU's MIB if the vendor default doesn't match">
+          <input value={form.pduOutletOid} onChange={e => update('pduOutletOid', e.target.value)} placeholder="1.3.6.1.4.1.318.1.1.12.3.5.1.1.2"
             className="settings-input" />
         </Field>
         <Field label="IPMI Default User" hint="Covers: Power page — per-server wattage & temp">
           <input value={form.ipmiDefaultUser} onChange={e => update('ipmiDefaultUser', e.target.value)} placeholder="admin"
             className="settings-input" />
+          <div className="text-[10px] text-slate-600 mt-1">Test BMC access: <code className="bg-slate-800 text-slate-300 px-1 rounded">ipmitool -H &lt;host&gt; -U admin -P &lt;pass&gt; power status</code></div>
         </Field>
         <Field label="IPMI Default Password">
           <input type="password" value={form.ipmiDefaultPassword} onChange={e => update('ipmiDefaultPassword', e.target.value)} placeholder="••••••••"
@@ -167,6 +259,7 @@ export default function SettingsPage() {
         <Field label="Rack Topology File" hint="Covers: Rack View — server U-slot positions (JSON path on server)">
           <input value={form.rackTopologyFile} onChange={e => update('rackTopologyFile', e.target.value)} placeholder="/etc/vyndc/rack-topology.json"
             className="settings-input" />
+          <div className="text-[10px] text-slate-600 mt-1">Must be readable by the VynDC process: <code className="bg-slate-800 text-slate-300 px-1 rounded">cat /etc/vyndc/rack-topology.json | jq .</code></div>
         </Field>
         <Field label="CMDB Inventory File" hint="Covers: Assets page — warranty, purchase date, model (JSON/CSV path)">
           <input value={form.cmdbInventoryFile} onChange={e => update('cmdbInventoryFile', e.target.value)} placeholder="/etc/vyndc/inventory.json"
@@ -193,8 +286,28 @@ export default function SettingsPage() {
             className="settings-input w-24" min={1} max={50} />
         </Field>
         <Field label="Slack Webhook URL">
-          <input value={form.slackWebhookUrl} onChange={e => update('slackWebhookUrl', e.target.value)} placeholder="https://hooks.slack.com/..."
-            className="settings-input" />
+          <div className="flex gap-2">
+            <input value={form.slackWebhookUrl} onChange={e => update('slackWebhookUrl', e.target.value)} placeholder="https://hooks.slack.com/..."
+              className="settings-input flex-1" />
+            <button
+              onClick={sendSlackTest}
+              disabled={slackTestStatus === 'sending' || !form.slackWebhookUrl}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-700/50 border border-slate-600/40 text-slate-300 text-xs font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            >
+              {slackTestStatus === 'sending' ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+          {slackTestStatus === 'ok' && (
+            <div className="flex items-center gap-1.5 text-[11px] text-green-400 mt-1">
+              <CheckCircle size={11} /> {slackTestMsg}
+            </div>
+          )}
+          {slackTestStatus === 'error' && (
+            <div className="flex items-start gap-1.5 text-[11px] text-red-400 mt-1">
+              <XCircle size={11} className="shrink-0 mt-0.5" />
+              <span>{slackTestMsg}</span>
+            </div>
+          )}
         </Field>
         <Field label="Email Alerts">
           <label className="flex items-center gap-2 cursor-pointer">
@@ -387,3 +500,4 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
     </div>
   )
 }
+

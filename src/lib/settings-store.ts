@@ -7,6 +7,8 @@ export interface AppSettings {
   alertmanagerUrl: string
   snmpCommunity: string
   snmpPduHost: string
+  pduVendor: 'apc' | 'raritan' | 'vertiv' | 'eaton' | 'servertech' | 'generic'
+  pduOutletOid: string  // manual OID override, takes precedence over vendor default
   ipmiDefaultUser: string
   ipmiDefaultPassword: string
   // Rack & asset inventory
@@ -39,6 +41,8 @@ const DEFAULTS: AppSettings = {
   alertmanagerUrl: '',
   snmpCommunity: 'public',
   snmpPduHost: '',
+  pduVendor: 'apc',
+  pduOutletOid: '',
   ipmiDefaultUser: 'admin',
   ipmiDefaultPassword: '',
   // Rack & asset inventory
@@ -90,3 +94,4 @@ export function saveSettings(partial: Partial<AppSettings>): AppSettings {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(updated, null, 2), 'utf8')
   return updated
 }
+

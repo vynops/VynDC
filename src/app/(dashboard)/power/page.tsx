@@ -4,7 +4,7 @@ import { Zap, Thermometer, Battery, TrendingUp } from 'lucide-react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts'
 import type { PowerMetrics } from '@/lib/simulation'
 
-type PowerData = PowerMetrics & { isEstimated?: boolean }
+type PowerData = PowerMetrics & { isEstimated?: boolean; pduWarning?: string }
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -19,6 +19,13 @@ export default function PowerPage() {
         <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-orange-500/10 border border-orange-500/20 text-xs text-orange-300">
           <Zap size={12} className="text-orange-400 flex-shrink-0" />
           <span><span className="font-semibold">Estimated power</span> — values derived from CPU utilisation × vCPU TDP. Connect a PDU via SNMP (Settings → Infrastructure) for hardware-accurate readings.</span>
+        </div>
+      )}
+      {/* PDU configured but unreachable/unsupported vendor OID */}
+      {power.pduWarning && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-300">
+          <Zap size={12} className="text-red-400 flex-shrink-0" />
+          <span>{power.pduWarning}</span>
         </div>
       )}
       {/* Top metric cards */}
@@ -112,3 +119,4 @@ export default function PowerPage() {
     </div>
   )
 }
+

@@ -21,6 +21,7 @@ import {
   type SeenAlert,
 } from './oncall-store'
 import { getSettings } from './settings-store'
+import { isUnderMaintenance, isSlapaused } from './maintenance-store'
 import type { Incident } from './simulation'
 import fs from 'fs'
 import path from 'path'
@@ -107,7 +108,29 @@ export function dispatchAlerts(incidents: Incident[]): void {
 
     const ageMin  = (now - new Date(inc.createdAt).getTime()) / 60_000
 
-    // ── 1. NEW INCIDENT ──────────────────────────────────────────
+    // ── MAINTENANCE WINDOW SUPPRESSION ──────────────────────────
+    const maintenanceCtx = { hostname: inc.hostname, rack: inc.rack, category: inc.category }
+    if (isUnderMaintenance(maintenanceCtx)) {
+      // Mark as seen so we don't flood when the window ends, but skip all notifications
+      if (!seen[inc.id]) {
+        seen[inc.id] = {
+          id: inc.id,
+          firstSeenAt: inc.createdAt,
+          severity: inc.severity,
+          title: inc.title,
+          notifiedAt: new Date().toISOString(),
+          escalationStep: 0,
+          acknowledged: inc.status === 'acknowledged',
+          resolved: false,
+          ackBreachNotified: true,   // suppress SLA breach alerts during maintenance
+          resolveBreachNotified: true,
+        }
+      }
+      continue
+    }
+
+    // ── SLA PAUSE CHECK ──────────────────────────────────────────
+    const slaPaused = isSlapaused(maintenanceCtx)
     if (!seen[inc.id]) {
       // Catch-up suppression: if alert is already older than all SLA + escalation
       // thresholds, mark everything as already notified to avoid a historical flood.
@@ -123,8 +146,8 @@ export function dispatchAlerts(incidents: Incident[]): void {
         escalationStep:         isCatchUp ? (policy?.steps.length ?? 0) : 0,
         acknowledged:           inc.status === 'acknowledged',
         resolved:               false,
-        ackBreachNotified:      isCatchUp || ageMin > slaTier.ackMinutes,
-        resolveBreachNotified:  isCatchUp || ageMin > slaTier.resolveMinutes,
+        ackBreachNotified:      isCatchUp || slaPaused || ageMin > slaTier.ackMinutes,
+        resolveBreachNotified:  isCatchUp || slaPaused || ageMin > slaTier.resolveMinutes,
       }
 
       if (!isCatchUp) {
@@ -147,7 +170,7 @@ export function dispatchAlerts(incidents: Incident[]): void {
     entry.acknowledged = inc.status === 'acknowledged'
 
     // ── 2. SLA ACK BREACH ────────────────────────────────────────
-    if (!entry.acknowledged && !entry.ackBreachNotified && ageMin > slaTier.ackMinutes) {
+    if (!entry.acknowledged && !entry.ackBreachNotified && !slaPaused && ageMin > slaTier.ackMinutes) {
       entry.ackBreachNotified = true
       const emails = [...new Set([...oncall, ...defaultEmails])]
       const msg = `⚠️ *SLA ACK BREACH* — Not acknowledged within ${slaTier.ackMinutes}min\n*[${inc.severity.toUpperCase()}]* ${inc.title} (open ${Math.round(ageMin)}min)`
@@ -158,7 +181,7 @@ export function dispatchAlerts(incidents: Incident[]): void {
     }
 
     // ── 3. SLA RESOLVE BREACH ────────────────────────────────────
-    if (!entry.resolveBreachNotified && ageMin > slaTier.resolveMinutes) {
+    if (!entry.resolveBreachNotified && !slaPaused && ageMin > slaTier.resolveMinutes) {
       entry.resolveBreachNotified = true
       const emails = [...new Set([...oncall, ...defaultEmails])]
       const msg = `🔴 *SLA RESOLVE BREACH* — Unresolved for ${Math.round(ageMin)}min (SLA: ${slaTier.resolveMinutes}min)\n*[${inc.severity.toUpperCase()}]* ${inc.title}`

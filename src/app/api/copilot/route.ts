@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth'
+import type { SessionPayload } from '@/lib/auth'
+import { recordPromptHistory } from '@/lib/copilot-history'
 import { recordUsage } from '@/lib/copilot-usage'
 import { getSettings } from '@/lib/settings-store'
 import {
@@ -177,6 +179,7 @@ function buildDataDrivenResponse(snap: Snapshot, query: string): string {
 export async function POST(req: NextRequest) {
   const auth = await requireRole(req, 'viewer')
   if (auth instanceof NextResponse) return auth
+  const session = auth as SessionPayload
 
   try {
     const { messages } = await req.json() as { messages: Message[] }
@@ -187,6 +190,7 @@ export async function POST(req: NextRequest) {
     const settings = getSettings()
     const apiKey = settings.groqApiKey || process.env.GROQ_API_KEY || ''
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content ?? ''
+    recordPromptHistory(session.id, lastUserMsg)
 
     // Fetch live data once — used for both the Groq system prompt and the no-key fallback
     const snapshot = await fetchSnapshot()

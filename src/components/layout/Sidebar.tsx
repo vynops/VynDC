@@ -6,8 +6,8 @@ import { useState } from 'react'
 import useSWR from 'swr'
 import {
   LayoutDashboard, Server, Layers, Zap, HardDrive, Network,
-  AlertTriangle, Brain, Package, Bot, Users, Settings,
-  LogOut, Menu, X, ChevronRight, Phone, GitBranch, Timer,
+  AlertTriangle, Brain, Package, Bot, Users, Settings, ShieldCheck,
+  LogOut, Menu, X, ChevronRight, Phone, GitBranch, Timer, CalendarClock, PlayCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -17,20 +17,38 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { href: '/overview', label: 'Overview', icon: LayoutDashboard },
-  { href: '/servers', label: 'Servers', icon: Server },
-  { href: '/rack', label: 'Rack View', icon: Layers },
-  { href: '/power', label: 'Power & Cooling', icon: Zap },
-  { href: '/storage', label: 'Storage', icon: HardDrive },
-  { href: '/network', label: 'Network', icon: Network },
-  { href: '/incidents', label: 'Incidents', icon: AlertTriangle },
-  { href: '/oncall', label: 'On-Call', icon: Phone },
-  { href: '/routing', label: 'Routing & Escalations', icon: GitBranch },
-  { href: '/sla', label: 'SLA Tracker', icon: Timer },
-  { href: '/predictions', label: 'Predictions', icon: Brain },
-  { href: '/assets', label: 'Assets', icon: Package },
-  { href: '/copilot', label: 'AI Copilot', icon: Bot },
+const NAV_SECTIONS: Array<{ label: string; items: NavItem[] }> = [
+  {
+    label: 'Fleet',
+    items: [
+      { href: '/overview', label: 'Overview', icon: LayoutDashboard },
+      { href: '/servers', label: 'Servers', icon: Server },
+      { href: '/rack', label: 'Rack View', icon: Layers },
+      { href: '/power', label: 'Power & Cooling', icon: Zap },
+      { href: '/storage', label: 'Storage', icon: HardDrive },
+      { href: '/network', label: 'Network', icon: Network },
+    ],
+  },
+  {
+    label: 'Observe',
+    items: [
+      { href: '/assets', label: 'Assets', icon: Package },
+      { href: '/predictions', label: 'Predictions', icon: Brain },
+      { href: '/copilot', label: 'AI Copilot', icon: Bot },
+      { href: '/automation', label: 'Automation', icon: PlayCircle },
+      { href: '/autonomous-ops', label: 'Autonomous Ops', icon: ShieldCheck },
+    ],
+  },
+  {
+    label: 'Operate',
+    items: [
+      { href: '/incidents', label: 'Incidents', icon: AlertTriangle },
+      { href: '/maintenance', label: 'Maintenance', icon: CalendarClock },
+      { href: '/oncall', label: 'On-Call', icon: Phone },
+      { href: '/routing', label: 'Routing & Escalations', icon: GitBranch },
+      { href: '/sla', label: 'SLA Tracker', icon: Timer },
+    ],
+  },
 ]
 
 const BOTTOM_ITEMS: NavItem[] = [
@@ -94,16 +112,28 @@ function SidebarContent({ pathname, onClose }: SidebarContentProps) {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-        {NAV_ITEMS.map(item => (
-          <NavLink key={item.href} item={item} active={pathname === item.href} onClick={onClose} />
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
+        {NAV_SECTIONS.map(section => (
+          <div key={section.label}>
+            <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-600">
+              {section.label}
+            </div>
+            <div className="space-y-1">
+              {section.items.map(item => (
+                <NavLink key={item.href} item={item} active={pathname === item.href} onClick={onClose} />
+              ))}
+            </div>
+          </div>
         ))}
 
-        <div className="border-t border-slate-800/60 my-3" />
-
-        {BOTTOM_ITEMS.map(item => (
-          <NavLink key={item.href} item={item} active={pathname === item.href} onClick={onClose} />
-        ))}
+        <div className="border-t border-slate-800/60 pt-4 space-y-1">
+          <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-600">
+            Admin
+          </div>
+          {BOTTOM_ITEMS.map(item => (
+            <NavLink key={item.href} item={item} active={pathname === item.href} onClick={onClose} />
+          ))}
+        </div>
       </nav>
 
       {/* User */}
