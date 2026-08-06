@@ -24,15 +24,15 @@ const NAV_SECTIONS: Array<{ label: string; items: NavItem[] }> = [
       { href: '/overview', label: 'Overview', icon: LayoutDashboard },
       { href: '/servers', label: 'Servers', icon: Server },
       { href: '/rack', label: 'Rack View', icon: Layers },
+      { href: '/assets', label: 'Assets', icon: Package },
       { href: '/power', label: 'Power & Cooling', icon: Zap },
       { href: '/storage', label: 'Storage', icon: HardDrive },
       { href: '/network', label: 'Network', icon: Network },
     ],
   },
   {
-    label: 'Observe',
+    label: 'AIOps',
     items: [
-      { href: '/assets', label: 'Assets', icon: Package },
       { href: '/predictions', label: 'Predictions', icon: Brain },
       { href: '/copilot', label: 'AI Copilot', icon: Bot },
       { href: '/automation', label: 'Automation', icon: PlayCircle },
@@ -191,3 +191,4 @@ export default function Sidebar() {
     </>
   )
 }
+
