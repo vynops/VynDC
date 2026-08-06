@@ -469,23 +469,11 @@ Please follow the existing code style (TypeScript strict, Tailwind utility class
 | **VynDC** | Data center management | [vynops/VynDC](https://github.com/vynops/VynDC) |
 | **VynCICD** | CI/CD pipeline management | [vynops/VynCICD](https://github.com/vynops/VynCICD) |
 
-
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for full text.
-
-Free to use, modify, and self-host. No telemetry. No call-home. Your data stays on your infrastructure.
+MIT — see [LICENSE](LICENSE)
 
 ---
 
-<div align="center">
-
-Built with ❤️ by the [VynOps](https://vynops.online) team
-
-**[Live Demo](https://dc.vynops.online) · [VynOps Platform](https://vynops.online) · [GitHub](https://github.com/vynops/VynDC)**
-
-*No cloud dependency. Deploy on your own infrastructure and own your monitoring stack.*
-
-</div>
