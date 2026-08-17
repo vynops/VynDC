@@ -1,5 +1,11 @@
 [
   {
+    "id": "1786443882272-g7azmn",
+    "userId": "af53d698-f489-481a-a0e8-d11a2ab57a22",
+    "prompt": "Which servers are at risk of failure?",
+    "createdAt": "2026-08-11T10:24:42.272Z"
+  },
+  {
     "id": "1785663859691-8f6jdz",
     "userId": "af53d698-f489-481a-a0e8-d11a2ab57a22",
     "prompt": "Summarise the current incidents and recommended actions",

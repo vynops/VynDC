@@ -69,10 +69,11 @@ const BLANK: Omit<Runbook, 'id'> = {
 /* ─── Execution accordion card ───────────────────────────────── */
 
 function ExecutionCard({
-  execution, runbooks, onApprove, onReject,
+  execution, runbooks, canApprove, onApprove, onReject,
 }: {
   execution: RunbookExecution
   runbooks: Runbook[]
+  canApprove: boolean
   onApprove: (id: string) => void
   onReject: (id: string) => void
 }) {
@@ -106,8 +107,10 @@ function ExecutionCard({
             <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
               <HourglassIcon size={13} className="text-amber-400 shrink-0" />
               <span className="flex-1 text-xs text-amber-200">Awaiting admin approval before execution.</span>
-              <button onClick={() => onApprove(execution.id)} className="rounded-md bg-emerald-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-400">Approve</button>
-              <button onClick={() => onReject(execution.id)} className="rounded-md bg-rose-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-rose-400">Reject</button>
+              {canApprove && <>
+                <button onClick={() => onApprove(execution.id)} className="rounded-md bg-emerald-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-400">Approve</button>
+                <button onClick={() => onReject(execution.id)} className="rounded-md bg-rose-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-rose-400">Reject</button>
+              </>}
             </div>
           )}
           {execution.actionLog.length > 0 && (
@@ -154,6 +157,9 @@ function RunbookModal({ initial, onSave, onClose }: {
   function removeStep(idx: number) { field('steps', form.steps.filter((_, i) => i !== idx)) }
   function stepField(idx: number, key: keyof RunbookStep, val: string) {
     field('steps', form.steps.map((s, i) => i === idx ? { ...s, [key]: val } : s))
+  }
+  function payloadField(idx: number, key: string, val: string) {
+    field('steps', form.steps.map((s, i) => i === idx ? { ...s, payload: { ...s.payload, [key]: val } } : s))
   }
 
   async function submit() {
@@ -231,6 +237,12 @@ function RunbookModal({ initial, onSave, onClose }: {
                     <option value="tag">tag</option>
                   </select>
                   <button onClick={() => removeStep(idx)} className="text-rose-400 hover:text-rose-300 shrink-0"><X size={14} /></button>
+                  <input
+                    value={step.payload[step.actionType === 'assign-owner' ? 'owner' : step.actionType === 'incident-note' ? 'note' : step.actionType === 'tag' ? 'tag' : 'message'] ?? ''}
+                    onChange={e => payloadField(idx, step.actionType === 'assign-owner' ? 'owner' : step.actionType === 'incident-note' ? 'note' : step.actionType === 'tag' ? 'tag' : 'message', e.target.value)}
+                    placeholder={step.actionType === 'assign-owner' ? 'Owner email or name' : step.actionType === 'incident-note' ? 'Incident note' : step.actionType === 'tag' ? 'Tag' : 'Notification message'}
+                    className="col-span-2 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-white md:col-span-1"
+                  />
                 </div>
               ))}
               {form.steps.length === 0 && <div className="text-xs text-slate-600 py-1">No steps yet.</div>}
@@ -260,6 +272,7 @@ export default function AutomationPage() {
   const [busyId, setBusyId]         = useState<string | null>(null)
   const [feedback, setFeedback]     = useState('')
   const [feedbackOk, setFeedbackOk] = useState(true)
+  const [role, setRole]             = useState<'admin' | 'editor' | 'viewer'>('viewer')
 
   // filters
   const [filterRisk, setFilterRisk]       = useState<'all'|'low'|'medium'|'high'>('all')
@@ -296,10 +309,16 @@ export default function AutomationPage() {
   }, [])
 
   useEffect(() => {
+    void fetch('/api/auth/me', { cache: 'no-store' }).then(res => res.ok ? res.json() : null).then(me => {
+      if (me?.role === 'admin' || me?.role === 'editor' || me?.role === 'viewer') setRole(me.role)
+    }).catch(() => undefined)
     void loadData()
     timer.current = setInterval(() => { void loadData() }, 30_000)
     return () => { if (timer.current) clearInterval(timer.current) }
   }, [loadData])
+
+  const canExecute = role === 'admin' || role === 'editor'
+  const canManage = role === 'admin'
 
   function flash(msg: string, ok = true) {
     setFeedback(msg); setFeedbackOk(ok)
@@ -392,10 +411,10 @@ export default function AutomationPage() {
               className="rounded-lg border border-slate-700 p-1.5 text-slate-400 hover:text-white">
               <RefreshCw size={14} />
             </button>
-            <button onClick={() => { setEditingRb({}); setShowModal(true) }}
+            {canManage && <button onClick={() => { setEditingRb({}); setShowModal(true) }}
               className="inline-flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-400">
               <Plus size={14} /> New runbook
-            </button>
+            </button>}
           </div>
         </div>
       </div>
@@ -473,19 +492,19 @@ export default function AutomationPage() {
                       <p className="mt-1 text-[10px] text-slate-600">class: {runbook.class}</p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <button onClick={() => { setEditingRb(runbook); setShowModal(true) }} title="Edit"
+                      {canManage && <button onClick={() => { setEditingRb(runbook); setShowModal(true) }} title="Edit"
                         className="rounded-lg border border-slate-700 p-1.5 text-slate-400 hover:text-white">
                         <Pencil size={13} />
-                      </button>
-                      <button onClick={() => setConfirmDelete(runbook.id)} title="Delete"
+                      </button>}
+                      {canManage && <button onClick={() => setConfirmDelete(runbook.id)} title="Delete"
                         className="rounded-lg border border-slate-700 p-1.5 text-slate-400 hover:text-rose-400">
                         <Trash2 size={13} />
-                      </button>
-                      <button onClick={() => void executeRunbook(runbook.id)} disabled={busyId === runbook.id || !runbook.enabled}
+                      </button>}
+                      {canExecute && <button onClick={() => void executeRunbook(runbook.id)} disabled={busyId === runbook.id || !runbook.enabled}
                         className="inline-flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-xs font-medium text-white hover:bg-orange-400 disabled:opacity-50 disabled:cursor-not-allowed">
                         {busyId === runbook.id ? <RefreshCw size={13} className="animate-spin" /> : <PlayCircle size={13} />}
                         Execute
-                      </button>
+                      </button>}
                     </div>
                   </div>
 
@@ -541,6 +560,7 @@ export default function AutomationPage() {
                   <div className="text-xs text-slate-500 py-3 text-center">No executions yet.</div>
                 ) : filteredExecutions.map(execution => (
                   <ExecutionCard key={execution.id} execution={execution} runbooks={runbooks}
+                    canApprove={canManage}
                     onApprove={id => void approveExecution(id, true)}
                     onReject={id => void approveExecution(id, false)}
                   />

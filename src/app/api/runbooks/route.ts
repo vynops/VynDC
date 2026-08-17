@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 import { requireRole } from '@/lib/auth'
+import { getClientIp, writeAudit } from '@/lib/audit'
 import { loadRunbooks, saveRunbooks, type Runbook } from '@/lib/runbook-store'
 
 export async function GET(req: NextRequest) {
@@ -36,6 +37,12 @@ export async function POST(req: NextRequest) {
     else runbooks.push(runbook)
 
     saveRunbooks(runbooks)
+    writeAudit({
+      actor: auth.email,
+      action: idx >= 0 ? 'runbook.update' : 'runbook.create',
+      detail: `${runbook.name} (${runbook.id})`,
+      ip: getClientIp(req),
+    })
     return NextResponse.json(runbook)
   } catch {
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
@@ -51,5 +58,11 @@ export async function DELETE(req: NextRequest) {
 
   const next = loadRunbooks().filter(r => r.id !== id)
   saveRunbooks(next)
+    writeAudit({
+      actor: auth.email,
+      action: 'runbook.delete',
+      detail: id,
+      ip: getClientIp(req),
+    })
   return NextResponse.json({ ok: true })
 }

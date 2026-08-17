@@ -95,7 +95,7 @@ export default function CopilotPage() {
           <div className="flex items-center gap-2 min-w-0">
             <Brain size={15} className="text-purple-400 shrink-0" />
             <h2 className="text-sm font-semibold text-white truncate">AI Copilot</h2>
-            <span className="text-[10px] text-slate-500 truncate">Database expert powered by Groq AI</span>
+            <span className="text-[10px] text-slate-500 truncate">Datacenter operations assistant with configurable AI provider</span>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">

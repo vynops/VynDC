@@ -13,7 +13,7 @@
  *
  * All notification I/O is fire-and-forget (non-blocking).
  */
-import { sendSlack, sendEmail } from './notifier'
+import { sendWebhookNotifications, sendEmail } from './notifier'
 import {
   loadSeenAlerts, saveSeenAlerts,
   matchRouting, loadSla, findPolicy,
@@ -159,7 +159,7 @@ export function dispatchAlerts(incidents: Incident[]): void {
         ])]
         const msg = formatMsg('🚨', inc)
         notify.push(async () => {
-          if (rule.notifySlack) await sendSlack(msg)
+          await sendWebhookNotifications(msg, { includeSlack: rule.notifySlack })
           if (emails.length)    await sendEmail(emails, `[VynDC] ${inc.severity.toUpperCase()}: ${inc.title}`, plainText(msg))
         })
       }
@@ -175,7 +175,7 @@ export function dispatchAlerts(incidents: Incident[]): void {
       const emails = [...new Set([...oncall, ...defaultEmails])]
       const msg = `⚠️ *SLA ACK BREACH* — Not acknowledged within ${slaTier.ackMinutes}min\n*[${inc.severity.toUpperCase()}]* ${inc.title} (open ${Math.round(ageMin)}min)`
       notify.push(async () => {
-        await sendSlack(msg)
+        await sendWebhookNotifications(msg)
         if (emails.length) await sendEmail(emails, `[VynDC SLA Breach] ${inc.title}`, plainText(msg))
       })
     }
@@ -186,7 +186,7 @@ export function dispatchAlerts(incidents: Incident[]): void {
       const emails = [...new Set([...oncall, ...defaultEmails])]
       const msg = `🔴 *SLA RESOLVE BREACH* — Unresolved for ${Math.round(ageMin)}min (SLA: ${slaTier.resolveMinutes}min)\n*[${inc.severity.toUpperCase()}]* ${inc.title}`
       notify.push(async () => {
-        await sendSlack(msg)
+        await sendWebhookNotifications(msg)
         if (emails.length) await sendEmail(emails, `[VynDC SLA Resolve Breach] ${inc.title}`, plainText(msg))
       })
     }
@@ -205,7 +205,7 @@ export function dispatchAlerts(incidents: Incident[]): void {
         const prefix = step.message ? `🔺 *${step.message}*` : `🔺 *Escalation step ${entry.escalationStep}*`
         const msg = `${prefix}\n*[${inc.severity.toUpperCase()}]* ${inc.title} — open ${Math.round(ageMin)}min`
         notify.push(async () => {
-          if (step.notifySlack) await sendSlack(msg)
+          await sendWebhookNotifications(msg, { includeSlack: step.notifySlack })
           if (emails.length)    await sendEmail(emails, `[VynDC Escalation] ${inc.title}`, plainText(msg))
         })
       }

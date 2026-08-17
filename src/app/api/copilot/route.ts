@@ -18,6 +18,229 @@ import {
 } from '@/lib/prometheus'
 
 type Message = { role: 'user' | 'assistant' | 'system'; content: string }
+type ClientMessage = { role: 'user' | 'assistant'; content: string }
+type AIProvider = 'groq' | 'openai' | 'anthropic' | 'google' | 'custom'
+
+interface ProviderResponse {
+  ok: boolean
+  content: string
+  promptTokens: number
+  completionTokens: number
+}
+
+function normalizeProvider(value: string | undefined): AIProvider {
+  if (value === 'openai' || value === 'anthropic' || value === 'google' || value === 'custom') return value
+  return 'groq'
+}
+
+function resolveAiConfig(settings: ReturnType<typeof getSettings>) {
+  const provider = normalizeProvider(settings.aiProvider)
+  const apiKey = settings.aiApiKey || settings.groqApiKey || process.env.GROQ_API_KEY || ''
+  const model = settings.aiModel || 'llama-3.3-70b-versatile'
+  const baseUrl = settings.aiBaseUrl?.trim() || ''
+  return { provider, apiKey, model, baseUrl }
+}
+
+async function callOpenAICompatible(baseUrl: string, apiKey: string, model: string, messages: Message[]): Promise<ProviderResponse> {
+  const normalizedBase = baseUrl.replace(/\/$/, '')
+  const endpoint = normalizedBase.endsWith('/chat/completions')
+    ? normalizedBase
+    : normalizedBase.endsWith('/v1') || normalizedBase.includes('/openai/v1')
+      ? `${normalizedBase}/chat/completions`
+      : `${normalizedBase}/v1/chat/completions`
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      max_tokens: 600,
+      temperature: 0.4,
+    }),
+  })
+
+  if (!response.ok) {
+    return { ok: false, content: '', promptTokens: 0, completionTokens: 0 }
+  }
+
+  const data = await response.json() as {
+    choices?: Array<{ message?: { content?: string } }>
+    usage?: { prompt_tokens?: number; completion_tokens?: number }
+  }
+
+  return {
+    ok: true,
+    content: data.choices?.[0]?.message?.content ?? '',
+    promptTokens: data.usage?.prompt_tokens ?? 0,
+    completionTokens: data.usage?.completion_tokens ?? 0,
+  }
+}
+
+async function listOpenAICompatibleModels(baseUrl: string, apiKey: string): Promise<string[]> {
+  const normalizedBase = baseUrl.replace(/\/$/, '')
+  const endpoint = normalizedBase.endsWith('/models')
+    ? normalizedBase
+    : normalizedBase.endsWith('/v1') || normalizedBase.includes('/openai/v1')
+      ? `${normalizedBase}/models`
+      : `${normalizedBase}/v1/models`
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
+    })
+    if (!res.ok) return []
+    const json = await res.json() as { data?: Array<{ id?: string }> }
+    return (json.data ?? []).map(m => m.id ?? '').filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+function isLikelyChatModel(model: string): boolean {
+  const m = model.toLowerCase()
+  return !m.includes('whisper') && !m.includes('prompt-guard') && !m.includes('safeguard')
+}
+
+function prioritizeModels(models: string[], current: string): string[] {
+  return models
+    .filter(m => m !== current)
+    .filter(isLikelyChatModel)
+    .sort((a, b) => {
+      const score = (v: string) => {
+        const x = v.toLowerCase()
+        if (x.includes('compound-mini')) return 100
+        if (x.includes('compound')) return 95
+        if (x.includes('gpt-oss-20b')) return 90
+        if (x.includes('gpt-oss-120b')) return 85
+        if (x.includes('qwen')) return 80
+        if (x.includes('llama')) return 75
+        return 50
+      }
+      return score(b) - score(a)
+    })
+    .slice(0, 8)
+}
+
+async function callOpenAICompatibleWithFallback(baseUrl: string, apiKey: string, model: string, messages: Message[]): Promise<ProviderResponse> {
+  const primary = await callOpenAICompatible(baseUrl, apiKey, model, messages)
+  if (primary.ok && primary.content) return primary
+
+  const models = await listOpenAICompatibleModels(baseUrl, apiKey)
+  const candidates = prioritizeModels(models, model)
+
+  for (const candidate of candidates) {
+    const alt = await callOpenAICompatible(baseUrl, apiKey, candidate, messages)
+    if (alt.ok && alt.content) return alt
+  }
+
+  return primary
+}
+
+async function callAnthropic(apiKey: string, model: string, messages: Message[]): Promise<ProviderResponse> {
+  const system = messages.find(m => m.role === 'system')?.content ?? ''
+  const chat = messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      system,
+      max_tokens: 600,
+      temperature: 0.4,
+      messages: chat,
+    }),
+  })
+
+  if (!response.ok) {
+    return { ok: false, content: '', promptTokens: 0, completionTokens: 0 }
+  }
+
+  const data = await response.json() as {
+    content?: Array<{ type: string; text?: string }>
+    usage?: { input_tokens?: number; output_tokens?: number }
+  }
+  const text = (data.content ?? []).filter(c => c.type === 'text').map(c => c.text ?? '').join('\n').trim()
+
+  return {
+    ok: true,
+    content: text,
+    promptTokens: data.usage?.input_tokens ?? 0,
+    completionTokens: data.usage?.output_tokens ?? 0,
+  }
+}
+
+async function callGoogle(apiKey: string, model: string, messages: Message[]): Promise<ProviderResponse> {
+  const system = messages.find(m => m.role === 'system')?.content ?? ''
+  const chat = messages.filter(m => m.role !== 'system').map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }))
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: system ? { parts: [{ text: system }] } : undefined,
+      contents: chat,
+      generationConfig: {
+        temperature: 0.4,
+        maxOutputTokens: 600,
+      },
+    }),
+  })
+
+  if (!response.ok) {
+    return { ok: false, content: '', promptTokens: 0, completionTokens: 0 }
+  }
+
+  const data = await response.json() as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+    usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number }
+  }
+  const text = data.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('\n').trim() ?? ''
+
+  return {
+    ok: true,
+    content: text,
+    promptTokens: data.usageMetadata?.promptTokenCount ?? 0,
+    completionTokens: data.usageMetadata?.candidatesTokenCount ?? 0,
+  }
+}
+
+async function requestCompletion(provider: AIProvider, apiKey: string, model: string, baseUrl: string, messages: Message[]): Promise<ProviderResponse> {
+  if (!apiKey) return { ok: false, content: '', promptTokens: 0, completionTokens: 0 }
+
+  if (provider === 'anthropic') {
+    return callAnthropic(apiKey, model, messages)
+  }
+
+  if (provider === 'google') {
+    return callGoogle(apiKey, model, messages)
+  }
+
+  if (provider === 'openai') {
+    return callOpenAICompatibleWithFallback('https://api.openai.com/v1', apiKey, model, messages)
+  }
+
+  if (provider === 'custom') {
+    if (!baseUrl) return { ok: false, content: '', promptTokens: 0, completionTokens: 0 }
+    return callOpenAICompatibleWithFallback(baseUrl, apiKey, model, messages)
+  }
+
+  return callOpenAICompatibleWithFallback('https://api.groq.com/openai/v1', apiKey, model, messages)
+}
 
 const DC_FALLBACK: Record<string, string> = {
   default:
@@ -123,8 +346,10 @@ async function fetchSnapshot(): Promise<Snapshot> {
 function buildSystemPrompt(snap: Snapshot): string {
   const { overview, servers, incidents, predictions, dataSource } = snap
   const critServers = servers.filter(s => s.status === 'critical' || s.status === 'warning')
-  return `You are VynDC Copilot, an intelligent AI assistant for a datacenter operations dashboard.
+  const generatedAt = new Date().toISOString()
+  return `You are VynDC Copilot, an AI assistant for datacenter operations.
 Data source: ${dataSource === 'live' ? 'LIVE (Prometheus + Alertmanager)' : 'simulation (Prometheus not reachable)'}.
+Snapshot time (UTC): ${generatedAt}
 
 ## Current Datacenter State
 - Total Servers: ${overview.totalServers} (Healthy: ${overview.healthyServers}, Warning: ${overview.warningServers}, Critical: ${overview.criticalServers}, Offline: ${overview.offlineServers})
@@ -141,7 +366,43 @@ ${incidents.map(i => `- [${i.severity.toUpperCase()}] ${i.title}${i.hostname ? `
 ## Active Failure Predictions (top 5)
 ${predictions.map(p => `- ${p.hostname} (${p.rack}): ${p.component} failure in ~${p.estimatedDaysToFailure} days (${p.confidence}% confidence) — ${p.reason}`).join('\n')}
 
-Respond concisely and helpfully. Focus on actionable insights. Use bullet points when listing items. Keep responses under 300 words unless detail is specifically requested.`
+## Response Rules
+- Use only the data in this prompt.
+- If data is missing or uncertain, explicitly say: "Unknown from current telemetry".
+- Separate observed facts from inferred recommendations.
+- Mention whether guidance is based on live data or simulation data.
+- Prefer concise operator-ready output.
+
+## Required Output Format
+Summary:
+- 1 to 3 bullets with current state.
+
+Key Risks:
+- List top risks with severity and affected host/service.
+- If none, write "No critical risks detected".
+
+Recommended Actions:
+- 1 to 5 concrete next steps, highest priority first.
+
+Data Confidence:
+- State: high, medium, or low.
+- Brief reason (for example: source availability, missing metrics, or simulation mode).
+
+Keep responses under 260 words unless user explicitly asks for detail.`
+}
+
+function sanitizeMessages(input: unknown): ClientMessage[] {
+  if (!Array.isArray(input)) return []
+  const clean = input
+    .filter((m): m is { role: 'user' | 'assistant'; content: string } =>
+      !!m && typeof m === 'object' && 'role' in m && 'content' in m
+      && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string'
+    )
+    .map(m => ({ role: m.role, content: m.content.trim() }))
+    .filter(m => m.content.length > 0)
+
+  // Keep context bounded to avoid prompt bloat and stale instructions.
+  return clean.slice(-20)
 }
 
 function buildDataDrivenResponse(snap: Snapshot, query: string): string {
@@ -173,7 +434,7 @@ function buildDataDrivenResponse(snap: Snapshot, query: string): string {
   }
 
   // Generic fallback with real counts
-  return `I'm the VynDC AI Copilot. Based on ${src}: **${overview.totalServers}** servers monitored, **${overview.openIncidents}** open incidents, **${overview.storageUsedPct}%** storage used. Ask me about server risk, incidents, storage, or datacenter health. _(Add a Groq API key in Settings for full AI responses.)_`
+  return `I'm the VynDC AI Copilot. Based on ${src}: **${overview.totalServers}** servers monitored, **${overview.openIncidents}** open incidents, **${overview.storageUsedPct}%** storage used. Ask me about server risk, incidents, storage, or datacenter health. _(Add an AI provider key in Settings for full AI responses.)_`
 }
 
 export async function POST(req: NextRequest) {
@@ -182,13 +443,14 @@ export async function POST(req: NextRequest) {
   const session = auth as SessionPayload
 
   try {
-    const { messages } = await req.json() as { messages: Message[] }
-    if (!Array.isArray(messages) || messages.length === 0) {
+    const { messages: rawMessages } = await req.json() as { messages: unknown }
+    const messages = sanitizeMessages(rawMessages)
+    if (messages.length === 0) {
       return NextResponse.json({ error: 'messages required' }, { status: 400 })
     }
 
     const settings = getSettings()
-    const apiKey = settings.groqApiKey || process.env.GROQ_API_KEY || ''
+    const { provider, apiKey, model, baseUrl } = resolveAiConfig(settings)
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content ?? ''
     recordPromptHistory(session.id, lastUserMsg)
 
@@ -200,35 +462,22 @@ export async function POST(req: NextRequest) {
     }
 
     const systemPrompt = buildSystemPrompt(snapshot)
-    const model = settings.aiModel || 'llama-3.3-70b-versatile'
+    const completion = await requestCompletion(
+      provider,
+      apiKey,
+      model,
+      baseUrl,
+      [{ role: 'system', content: systemPrompt }, ...messages]
+    )
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'system', content: systemPrompt }, ...messages],
-        max_tokens: 600,
-        temperature: 0.4,
-      }),
-    })
-
-    if (!response.ok) {
+    if (!completion.ok || !completion.content) {
       return NextResponse.json({ message: buildDataDrivenResponse(snapshot, lastUserMsg), demo: true })
     }
 
-    const data = await response.json() as {
-      choices: Array<{ message: { content: string } }>
-      usage?: { prompt_tokens: number; completion_tokens: number }
+    if (completion.promptTokens > 0 || completion.completionTokens > 0) {
+      recordUsage(completion.promptTokens, completion.completionTokens)
     }
-    const reply = data.choices?.[0]?.message?.content ?? ''
-    if (data.usage) {
-      recordUsage(data.usage.prompt_tokens ?? 0, data.usage.completion_tokens ?? 0)
-    }
-    return NextResponse.json({ message: reply, demo: false })
+    return NextResponse.json({ message: completion.content, demo: false })
   } catch {
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }

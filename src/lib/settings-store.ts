@@ -21,6 +21,9 @@ export interface AppSettings {
   powerAlertPctOverBudget: number
   // Alerting — delivery
   slackWebhookUrl: string
+  teamsWebhookUrl: string
+  customWebhookUrl: string
+  notificationTeam: string
   alertEmailEnabled: boolean
   alertRecipients: string  // comma-separated fallback emails
   smtpHost: string
@@ -29,7 +32,10 @@ export interface AppSettings {
   smtpPassword: string
   smtpFrom: string
   // AI Copilot
+  aiProvider: 'groq' | 'openai' | 'anthropic' | 'google' | 'custom'
   aiModel: string
+  aiApiKey: string
+  aiBaseUrl: string
   groqApiKey: string
   // General
   defaultRefreshInterval: number
@@ -55,6 +61,9 @@ const DEFAULTS: AppSettings = {
   powerAlertPctOverBudget: 10,
   // Alerting delivery
   slackWebhookUrl: '',
+  teamsWebhookUrl: '',
+  customWebhookUrl: '',
+  notificationTeam: '',
   alertEmailEnabled: false,
   alertRecipients: '',
   smtpHost: '',
@@ -63,8 +72,11 @@ const DEFAULTS: AppSettings = {
   smtpPassword: '',
   smtpFrom: '',
   // AI Copilot
+  aiProvider: 'groq',
   aiModel: 'llama-3.3-70b-versatile',
-  groqApiKey: '',
+  aiApiKey: process.env.GROQ_API_KEY ?? '',
+  aiBaseUrl: '',
+  groqApiKey: process.env.GROQ_API_KEY ?? '',
   // General
   defaultRefreshInterval: 30,
 }

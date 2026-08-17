@@ -1,17 +1,72 @@
 'use client'
 import { useState, useEffect } from 'react'
 import useSWR from 'swr'
-import { Save, Eye, EyeOff, RefreshCw, Brain, Bell, Database, Settings as SettingsIcon, Mail, Server, GitBranch, Send, CheckCircle, XCircle, Shield } from 'lucide-react'
+import { Save, Eye, EyeOff, RefreshCw, Brain, Bell, Database, Settings as SettingsIcon, Mail, Server, GitBranch, Send, CheckCircle, XCircle, Shield, Loader2 } from 'lucide-react'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
+const MASKED = '***configured***'
 
-const GROQ_MODELS = [
-  { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile (Recommended)' },
-  { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant (Fast)' },
-  { value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B (Long Context)' },
-  { value: 'gemma2-9b-it', label: 'Gemma 2 9B IT' },
-  { value: 'llama3-70b-8192', label: 'Llama 3 70B' },
-]
+const AI_PROVIDERS = [
+  {
+    id: 'groq',
+    label: 'Groq (Recommended)',
+    keyLabel: 'Groq API Key',
+    keyPlaceholder: 'gsk_...',
+    defaultModel: 'llama-3.3-70b-versatile',
+    models: [
+      { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile' },
+      { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant (Fast)' },
+      { value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B (Long context)' },
+      { value: 'gemma2-9b-it', label: 'Gemma 2 9B IT' },
+    ],
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    keyLabel: 'OpenAI API Key',
+    keyPlaceholder: 'sk-...',
+    defaultModel: 'gpt-4o-mini',
+    models: [
+      { value: 'gpt-4o', label: 'GPT-4o' },
+      { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast)' },
+      { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+    ],
+  },
+  {
+    id: 'anthropic',
+    label: 'Anthropic (Claude)',
+    keyLabel: 'Claude API Key',
+    keyPlaceholder: 'sk-ant-...',
+    defaultModel: 'claude-3-5-sonnet-latest',
+    models: [
+      { value: 'claude-3-5-sonnet-latest', label: 'Claude 3.5 Sonnet' },
+      { value: 'claude-3-haiku-latest', label: 'Claude 3 Haiku (Fast)' },
+      { value: 'claude-3-opus-latest', label: 'Claude 3 Opus' },
+    ],
+  },
+  {
+    id: 'google',
+    label: 'Google (Gemini)',
+    keyLabel: 'Gemini API Key',
+    keyPlaceholder: 'AIza...',
+    defaultModel: 'gemini-2.0-flash',
+    models: [
+      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+      { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+      { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+    ],
+  },
+  {
+    id: 'custom',
+    label: 'Custom / OpenAI-Compatible',
+    keyLabel: 'API Key',
+    keyPlaceholder: 'your-api-key',
+    defaultModel: 'your-model-id',
+    models: [],
+  },
+] as const
+
+type AIProviderId = typeof AI_PROVIDERS[number]['id']
 
 interface AppSettings {
   // Infrastructure
@@ -32,6 +87,9 @@ interface AppSettings {
   powerAlertPctOverBudget: number
   // Alerting delivery
   slackWebhookUrl: string
+  teamsWebhookUrl: string
+  customWebhookUrl: string
+  notificationTeam: string
   alertEmailEnabled: boolean
   alertRecipients: string
   smtpHost: string
@@ -40,6 +98,9 @@ interface AppSettings {
   smtpPassword: string
   smtpFrom: string
   // AI Copilot
+  aiProvider: AIProviderId
+  aiApiKey: string
+  aiBaseUrl: string
   aiModel: string
   groqApiKey: string
   // General
@@ -52,6 +113,12 @@ interface AuditEntry {
   action: string
   detail: string
   ip: string
+}
+
+interface ToastState {
+  kind: 'success' | 'error'
+  title: string
+  message: string
 }
 
 const ACTION_COLOR: Record<string, string> = {
@@ -77,12 +144,21 @@ export default function SettingsPage() {
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [toast, setToast] = useState<ToastState | null>(null)
   const [testTo, setTestTo] = useState('')
   const [testStatus, setTestStatus] = useState<'idle'|'sending'|'ok'|'error'>('idle')
   const [testMsg, setTestMsg] = useState('')
-  const [slackTestStatus, setSlackTestStatus] = useState<'idle'|'sending'|'ok'|'error'>('idle')
-  const [slackTestMsg, setSlackTestMsg] = useState('')
+  const [testingChannel, setTestingChannel] = useState<string | null>(null)
+  const [channelTestResults, setChannelTestResults] = useState<Record<string, { ok: boolean; msg: string }>>({})
+  const [testingAi, setTestingAi] = useState(false)
+  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
   const [connTest, setConnTest] = useState<Record<string, { status: 'idle'|'testing'|'ok'|'error'; msg: string }>>({})
+
+  function showToast(kind: ToastState['kind'], title: string, message: string) {
+    setToast({ kind, title, message })
+    setTimeout(() => setToast(null), 4500)
+  }
 
   async function testConnection(key: string, type: string, params: Record<string, string>) {
     setConnTest(t => ({ ...t, [key]: { status: 'testing', msg: '' } }))
@@ -94,8 +170,11 @@ export default function SettingsPage() {
       })
       const json = await res.json()
       setConnTest(t => ({ ...t, [key]: { status: res.ok ? 'ok' : 'error', msg: json.message || json.error || '' } }))
+      if (res.ok) showToast('success', 'Connection Test Passed', json.message || `${type} is reachable.`)
+      else showToast('error', 'Connection Test Failed', json.message || json.error || `${type} is unreachable.`)
     } catch (e) {
       setConnTest(t => ({ ...t, [key]: { status: 'error', msg: e instanceof Error ? e.message : 'Network error' } }))
+      showToast('error', 'Connection Test Failed', e instanceof Error ? e.message : 'Network error')
     }
     setTimeout(() => setConnTest(t => ({ ...t, [key]: { status: 'idle', msg: '' } })), 8000)
   }
@@ -116,29 +195,108 @@ export default function SettingsPage() {
         }),
       })
       const json = await res.json()
-      if (res.ok) { setTestStatus('ok'); setTestMsg(`Sent to ${json.to}`) }
-      else { setTestStatus('error'); setTestMsg(json.error ?? 'Unknown error') }
+      if (res.ok) {
+        const msg = `Sent to ${json.to}`
+        setTestStatus('ok')
+        setTestMsg(msg)
+        showToast('success', 'SMTP Test Passed', msg)
+      } else {
+        const msg = json.error ?? 'Unknown error'
+        setTestStatus('error')
+        setTestMsg(msg)
+        showToast('error', 'SMTP Test Failed', msg)
+      }
     } catch (e) {
-      setTestStatus('error'); setTestMsg(e instanceof Error ? e.message : 'Network error')
+      const msg = e instanceof Error ? e.message : 'Network error'
+      setTestStatus('error')
+      setTestMsg(msg)
+      showToast('error', 'SMTP Test Failed', msg)
     }
     setTimeout(() => setTestStatus('idle'), 8000)
   }
 
-  async function sendSlackTest() {
-    setSlackTestStatus('sending'); setSlackTestMsg('')
+  async function sendWebhookTest(channel: 'slackWebhookUrl' | 'teamsWebhookUrl' | 'customWebhookUrl', webhookUrl: string) {
+    setTestingChannel(channel)
+    setChannelTestResults(prev => {
+      const next = { ...prev }
+      delete next[channel]
+      return next
+    })
+
+    if (!webhookUrl.trim()) {
+      setChannelTestResults(prev => ({ ...prev, [channel]: { ok: false, msg: 'Webhook URL is empty.' } }))
+      setTestingChannel(null)
+      showToast('error', 'Webhook Test Failed', 'Webhook URL is empty.')
+      return
+    }
+
     try {
-      const res = await fetch('/api/settings/test-slack', {
+      const res = await fetch('/api/settings/test-notification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ webhookUrl: form?.slackWebhookUrl }),
+        body: JSON.stringify({ channel, url: webhookUrl, notificationTeam: form?.notificationTeam || '' }),
       })
-      const json = await res.json()
-      if (res.ok) { setSlackTestStatus('ok'); setSlackTestMsg(json.message ?? 'Webhook accepted') }
-      else { setSlackTestStatus('error'); setSlackTestMsg(json.error ?? 'Unknown error') }
+      const json = await res.json() as { ok?: boolean; message?: string; error?: string }
+      setChannelTestResults(prev => ({
+        ...prev,
+        [channel]: {
+          ok: !!(res.ok && json.ok !== false),
+          msg: json.message ?? json.error ?? (res.ok ? 'Webhook accepted' : 'Webhook test failed'),
+        },
+      }))
+      const msg = json.message ?? json.error ?? (res.ok ? 'Webhook accepted' : 'Webhook test failed')
+      showToast(res.ok && json.ok !== false ? 'success' : 'error', 'Webhook Test', msg)
     } catch (e) {
-      setSlackTestStatus('error'); setSlackTestMsg(e instanceof Error ? e.message : 'Network error')
+      setChannelTestResults(prev => ({
+        ...prev,
+        [channel]: { ok: false, msg: e instanceof Error ? e.message : 'Network error' },
+      }))
+      showToast('error', 'Webhook Test Failed', e instanceof Error ? e.message : 'Network error')
+    } finally {
+      setTestingChannel(null)
     }
-    setTimeout(() => setSlackTestStatus('idle'), 8000)
+  }
+
+  async function testAiConnection() {
+    if (!form) return
+    setTestingAi(true)
+    setAiTestResult(null)
+    try {
+      const res = await fetch('/api/copilot/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: form.aiProvider,
+          apiKey: form.aiApiKey,
+          model: form.aiModel,
+          baseUrl: form.aiBaseUrl,
+        }),
+      })
+      const json = await res.json() as {
+        ok?: boolean
+        message?: string
+        error?: string
+        modelAvailable?: boolean
+        suggestedModel?: string | null
+      }
+
+      if (json.modelAvailable === false && json.suggestedModel && json.suggestedModel !== form.aiModel) {
+        update('aiModel', json.suggestedModel)
+      }
+
+      setAiTestResult({
+        ok: !!(res.ok && json.ok !== false),
+        msg: json.message ?? json.error ?? (res.ok ? 'Connected' : 'Connection failed'),
+      })
+      const msg = json.message ?? json.error ?? (res.ok ? 'Connected' : 'Connection failed')
+      showToast(res.ok && json.ok !== false ? 'success' : 'error', 'AI Test Connection', msg)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Network error'
+      setAiTestResult({ ok: false, msg })
+      showToast('error', 'AI Test Connection Failed', msg)
+    } finally {
+      setTestingAi(false)
+    }
   }
 
   useEffect(() => { if (settings && !form) setForm(settings) }, [settings])
@@ -146,23 +304,63 @@ export default function SettingsPage() {
   function update<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
     setForm(f => f ? { ...f, [key]: value } : f)
     setSaved(false)
+    setSaveError('')
   }
 
   async function save() {
     if (!form) return
     setSaving(true)
-    await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
-    mutate(form, false)
-    setSaving(false); setSaved(true)
+    setSaveError('')
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const updated = await res.json() as Partial<AppSettings> & { error?: string }
+      if (!res.ok) {
+        throw new Error(updated.error || 'Failed to save settings')
+      }
+      const next = {
+        ...form,
+        ...updated,
+        aiApiKey: (updated.aiApiKey as string) || (form.aiApiKey ? MASKED : ''),
+        groqApiKey: (updated.groqApiKey as string) || (form.groqApiKey ? MASKED : ''),
+      } as AppSettings
+      setForm(next)
+      mutate(next, false)
+      setSaved(true)
+      showToast('success', 'Settings Saved', 'Configuration was saved successfully.')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to save settings'
+      console.error('[settings] save failed:', msg)
+      setSaveError(msg)
+      setSaved(false)
+      showToast('error', 'Save Failed', msg)
+    } finally {
+      setSaving(false)
+    }
     setTimeout(() => setSaved(false), 3000)
   }
 
   if (!form) return <div className="p-6 text-slate-500 text-sm">Loading...</div>
 
   const isLive = !!(form.prometheusUrl || form.alertmanagerUrl)
+  const currentProvider = AI_PROVIDERS.find(p => p.id === form.aiProvider) ?? AI_PROVIDERS[0]
+  const availableModels = currentProvider.models.length > 0
+    ? currentProvider.models
+    : [{ value: form.aiModel, label: `${form.aiModel || currentProvider.defaultModel} (custom)` }]
+  const suggestedModels = availableModels.map(m => m.value)
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-2xl mx-auto">
+      {toast && (
+        <div className={`rounded-xl border px-3 py-2 text-xs ${toast.kind === 'success' ? 'bg-green-500/10 border-green-500/30 text-green-300' : 'bg-red-500/10 border-red-500/30 text-red-300'}`}>
+          <div className="font-semibold">{toast.title}</div>
+          <div className="mt-0.5 break-all">{toast.message}</div>
+        </div>
+      )}
+
       {/* Status banner */}
       {isLive ? (
         <div className="bg-green-500/10 border border-green-500/30 rounded-2xl px-4 py-3 flex items-center gap-2 text-xs text-green-400">
@@ -290,24 +488,76 @@ export default function SettingsPage() {
             <input value={form.slackWebhookUrl} onChange={e => update('slackWebhookUrl', e.target.value)} placeholder="https://hooks.slack.com/..."
               className="settings-input flex-1" />
             <button
-              onClick={sendSlackTest}
-              disabled={slackTestStatus === 'sending' || !form.slackWebhookUrl}
+              onClick={() => sendWebhookTest('slackWebhookUrl', form.slackWebhookUrl)}
+              disabled={testingChannel === 'slackWebhookUrl' || !form.slackWebhookUrl}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-700/50 border border-slate-600/40 text-slate-300 text-xs font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
             >
-              {slackTestStatus === 'sending' ? 'Testing…' : 'Test'}
+              {testingChannel === 'slackWebhookUrl' ? 'Testing…' : 'Test'}
             </button>
           </div>
-          {slackTestStatus === 'ok' && (
+          {channelTestResults.slackWebhookUrl?.ok && (
             <div className="flex items-center gap-1.5 text-[11px] text-green-400 mt-1">
-              <CheckCircle size={11} /> {slackTestMsg}
+              <CheckCircle size={11} /> {channelTestResults.slackWebhookUrl.msg}
             </div>
           )}
-          {slackTestStatus === 'error' && (
+          {channelTestResults.slackWebhookUrl && !channelTestResults.slackWebhookUrl.ok && (
             <div className="flex items-start gap-1.5 text-[11px] text-red-400 mt-1">
               <XCircle size={11} className="shrink-0 mt-0.5" />
-              <span>{slackTestMsg}</span>
+              <span>{channelTestResults.slackWebhookUrl.msg}</span>
             </div>
           )}
+        </Field>
+        <Field label="Microsoft Teams Webhook">
+          <div className="flex gap-2">
+            <input value={form.teamsWebhookUrl} onChange={e => update('teamsWebhookUrl', e.target.value)} placeholder="https://outlook.webhook.office.com/..."
+              className="settings-input flex-1" />
+            <button
+              onClick={() => sendWebhookTest('teamsWebhookUrl', form.teamsWebhookUrl)}
+              disabled={testingChannel === 'teamsWebhookUrl' || !form.teamsWebhookUrl}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-700/50 border border-slate-600/40 text-slate-300 text-xs font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            >
+              {testingChannel === 'teamsWebhookUrl' ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+          {channelTestResults.teamsWebhookUrl?.ok && (
+            <div className="flex items-center gap-1.5 text-[11px] text-green-400 mt-1">
+              <CheckCircle size={11} /> {channelTestResults.teamsWebhookUrl.msg}
+            </div>
+          )}
+          {channelTestResults.teamsWebhookUrl && !channelTestResults.teamsWebhookUrl.ok && (
+            <div className="flex items-start gap-1.5 text-[11px] text-red-400 mt-1">
+              <XCircle size={11} className="shrink-0 mt-0.5" />
+              <span>{channelTestResults.teamsWebhookUrl.msg}</span>
+            </div>
+          )}
+        </Field>
+        <Field label="Custom Webhook URL" hint="Sends JSON POST payload for external systems">
+          <div className="flex gap-2">
+            <input value={form.customWebhookUrl} onChange={e => update('customWebhookUrl', e.target.value)} placeholder="https://your-endpoint.example/api/alerts"
+              className="settings-input flex-1" />
+            <button
+              onClick={() => sendWebhookTest('customWebhookUrl', form.customWebhookUrl)}
+              disabled={testingChannel === 'customWebhookUrl' || !form.customWebhookUrl}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-700/50 border border-slate-600/40 text-slate-300 text-xs font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            >
+              {testingChannel === 'customWebhookUrl' ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+          {channelTestResults.customWebhookUrl?.ok && (
+            <div className="flex items-center gap-1.5 text-[11px] text-green-400 mt-1">
+              <CheckCircle size={11} /> {channelTestResults.customWebhookUrl.msg}
+            </div>
+          )}
+          {channelTestResults.customWebhookUrl && !channelTestResults.customWebhookUrl.ok && (
+            <div className="flex items-start gap-1.5 text-[11px] text-red-400 mt-1">
+              <XCircle size={11} className="shrink-0 mt-0.5" />
+              <span>{channelTestResults.customWebhookUrl.msg}</span>
+            </div>
+          )}
+        </Field>
+        <Field label="Notify Team" hint="Optional label sent with webhook payloads for routing">
+          <input value={form.notificationTeam} onChange={e => update('notificationTeam', e.target.value)} placeholder="SRE Team"
+            className="settings-input" />
         </Field>
         <Field label="Email Alerts">
           <label className="flex items-center gap-2 cursor-pointer">
@@ -382,12 +632,35 @@ export default function SettingsPage() {
         </Field>
       </Section>
 
-      {/* AI Copilot */}      <Section icon={Brain} title="AI Copilot" subtitle="Groq API configuration">
-        <Field label="Groq API Key">
+      {/* AI Copilot */}
+      <Section icon={Brain} title="AI Copilot" subtitle="Provider, model, and API configuration">
+        <Field label="AI Provider">
+          <select
+            value={form.aiProvider}
+            onChange={e => {
+              const provider = AI_PROVIDERS.find(p => p.id === e.target.value as AIProviderId) ?? AI_PROVIDERS[0]
+              update('aiProvider', provider.id)
+              update('aiModel', provider.defaultModel)
+              update('aiApiKey', '')
+              if (provider.id === 'groq') update('groqApiKey', '')
+              setAiTestResult(null)
+            }}
+            className="settings-input"
+          >
+            {AI_PROVIDERS.map(p => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label={currentProvider.keyLabel}>
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
-              <input type={showKey ? 'text' : 'password'} value={form.groqApiKey}
-                onChange={e => update('groqApiKey', e.target.value)} placeholder="gsk_..."
+              <input type={showKey ? 'text' : 'password'} value={form.aiApiKey}
+                onChange={e => {
+                  update('aiApiKey', e.target.value)
+                  if (form.aiProvider === 'groq') update('groqApiKey', e.target.value)
+                  setAiTestResult(null)
+                }} placeholder={currentProvider.keyPlaceholder}
                 className="settings-input w-full pr-9" autoComplete="off" />
               <button type="button" onClick={() => setShowKey(v => !v)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
@@ -395,13 +668,66 @@ export default function SettingsPage() {
               </button>
             </div>
           </div>
-          <div className="text-[10px] text-slate-600 mt-1">Get your key at <a href="https://console.groq.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">console.groq.com</a></div>
+          {form.aiProvider === 'groq' && <div className="text-[10px] text-slate-600 mt-1">Get your key at <a href="https://console.groq.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">console.groq.com</a></div>}
+          {form.aiProvider === 'openai' && <div className="text-[10px] text-slate-600 mt-1">Get your key at <a href="https://platform.openai.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">platform.openai.com</a></div>}
+          {form.aiProvider === 'anthropic' && <div className="text-[10px] text-slate-600 mt-1">Get your key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">console.anthropic.com</a></div>}
+          {form.aiProvider === 'google' && <div className="text-[10px] text-slate-600 mt-1">Get your key at <a href="https://aistudio.google.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">aistudio.google.com</a></div>}
         </Field>
         <Field label="AI Model">
-          <select value={form.aiModel} onChange={e => update('aiModel', e.target.value)}
-            className="settings-input">
-            {GROQ_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-          </select>
+          <div className="space-y-1">
+            <input
+              list="ai-model-suggestions"
+              value={form.aiModel}
+              onChange={e => {
+                update('aiModel', e.target.value)
+                setAiTestResult(null)
+              }}
+              placeholder={currentProvider.defaultModel}
+              className="settings-input"
+            />
+            <datalist id="ai-model-suggestions">
+              {suggestedModels.map(model => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            <div className="text-[10px] text-slate-600">You can paste any provider model ID returned by Test Connection.</div>
+          </div>
+        </Field>
+        {form.aiProvider === 'custom' && (
+          <Field label="AI Base URL" hint="OpenAI-compatible endpoint (required for custom provider)">
+            <input
+              value={form.aiBaseUrl}
+              onChange={e => {
+                update('aiBaseUrl', e.target.value)
+                setAiTestResult(null)
+              }}
+              placeholder="https://api.example.com/v1"
+              className="settings-input"
+            />
+          </Field>
+        )}
+        <Field label="Test AI Connection" hint="Checks provider key and model reachability">
+          <div className="space-y-2">
+            <button
+              onClick={testAiConnection}
+              disabled={testingAi || !form.aiApiKey || (form.aiProvider === 'custom' && !form.aiBaseUrl.trim())}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-700/50 border border-slate-600/40 text-slate-300 text-xs font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {testingAi ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+              {testingAi ? 'Testing…' : 'Test Connection'}
+            </button>
+            {aiTestResult?.ok && (
+              <div className="flex items-center gap-1.5 text-[11px] text-green-400">
+                <CheckCircle size={11} /> {aiTestResult.msg}
+              </div>
+            )}
+            {aiTestResult && !aiTestResult.ok && (
+              <div className="flex items-start gap-1.5 text-[11px] text-red-400">
+                <XCircle size={11} className="shrink-0 mt-0.5" />
+                <span>{aiTestResult.msg}</span>
+              </div>
+            )}
+          </div>
         </Field>
         {/* Usage stats */}
         {usage && (
@@ -469,6 +795,7 @@ export default function SettingsPage() {
           {saving ? 'Saving...' : 'Save Settings'}
         </button>
         {saved && <span className="text-xs text-green-400">Settings saved!</span>}
+        {saveError && <span className="text-xs text-red-400">Save failed: {saveError}</span>}
       </div>
     </div>
   )

@@ -4,7 +4,18 @@ import useSWR from 'swr'
 import { Brain, Clock, AlertTriangle } from 'lucide-react'
 import type { Prediction } from '@/lib/simulation'
 
-const fetcher = (url: string) => fetch(url).then(r => r.json())
+const fetcher = async (url: string): Promise<Prediction[]> => {
+  const response = await fetch(url, { cache: 'no-store' })
+  const data = await response.json() as unknown
+  if (!response.ok) {
+    const message = typeof data === 'object' && data !== null && 'error' in data && typeof data.error === 'string'
+      ? data.error
+      : 'Unable to load predictions'
+    throw new Error(message)
+  }
+  if (!Array.isArray(data)) throw new Error('Invalid predictions response')
+  return data as Prediction[]
+}
 
 const SEV_BADGE: Record<string, string> = {
   critical: 'bg-red-500/20 text-red-400 border border-red-500/30',
@@ -22,7 +33,8 @@ const COMP_BADGE: Record<string, string> = {
 }
 
 export default function PredictionsPage() {
-  const { data: predictions = [] } = useSWR<Prediction[]>('/api/predictions', fetcher, { refreshInterval: 30000 })
+  const { data, error, isLoading, mutate } = useSWR<Prediction[]>('/api/predictions', fetcher, { refreshInterval: 30000 })
+  const predictions = data ?? []
   const [filterSeverity, setFilterSeverity] = useState('all')
   const [filterComponent, setFilterComponent] = useState('all')
 
@@ -39,6 +51,20 @@ export default function PredictionsPage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-4 max-w-7xl mx-auto">
+      {error && (
+        <div className="flex items-center gap-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          <AlertTriangle size={15} className="shrink-0" />
+          <span className="flex-1">{error instanceof Error ? error.message : 'Unable to load predictions'}</span>
+          <button onClick={() => void mutate()} className="shrink-0 underline hover:text-rose-100">Retry</button>
+        </div>
+      )}
+
+      {isLoading && !data && (
+        <div className="rounded-xl border border-slate-800/60 bg-[#111827] p-8 text-center text-sm text-slate-500">
+          Loading predictions…
+        </div>
+      )}
+
       {/* Summary */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#111827] border border-slate-800/60 rounded-2xl p-4">
@@ -75,7 +101,7 @@ export default function PredictionsPage() {
       </div>
 
       {/* Prediction cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+      {!isLoading && <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.map(pred => (
           <div key={pred.id} className="bg-[#111827] border border-slate-800/60 rounded-2xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
@@ -124,7 +150,7 @@ export default function PredictionsPage() {
             No predictions match the current filters
           </div>
         )}
-      </div>
+      </div>}
     </div>
   )
 }
