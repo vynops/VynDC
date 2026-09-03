@@ -16,3 +16,9 @@ data/incidents.json
 *-
 *.ts1
 *.tsx1
+
+# runtime JSON data
+data/*.json
+data/*.json2
+!data/.gitkeep
+!data/*.example.json

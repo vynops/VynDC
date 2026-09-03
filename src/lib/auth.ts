@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from 'jose'
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
+import { findUserById } from '@/lib/user-store'
 
 export interface SessionPayload {
   id: string
@@ -71,6 +72,10 @@ export async function requireRole(
   const session = await getSessionFromRequest(req)
   if (!session) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  const user = findUserById(session.id)
+  if (!user || user.active === false) {
+    return NextResponse.json({ error: 'Account is inactive' }, { status: 403 })
   }
   if (!hasRole(session, minimum)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })

@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import useSWR from 'swr'
-import { Users, Plus, Trash2, Edit2, X, Shield, Lock } from 'lucide-react'
+import { Users, Plus, Trash2, Edit2, X, Shield, Lock, Key, Eye, EyeOff, Power } from 'lucide-react'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -11,10 +11,11 @@ const ROLE_BADGE: Record<string, string> = {
   viewer: 'bg-slate-700 text-slate-400 border border-slate-600',
 }
 
-interface UserRecord { id: string; email: string; name: string; role: string; lastLogin?: string; createdAt: string }
+interface UserRecord { id: string; email: string; name: string; role: string; active: boolean; lastLogin?: string; createdAt: string }
 
 function InviteModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [form, setForm] = useState({ name: '', email: '', password: '', role: 'viewer' })
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -41,8 +42,13 @@ function InviteModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
             className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-orange-500/60" />
           <input required type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="Email address"
             className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-orange-500/60" />
-          <input required type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder="Initial password"
-            className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-orange-500/60" />
+          <div className="relative">
+            <input required type={showPassword ? 'text' : 'password'} value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder="Initial password"
+              className="w-full px-3 py-2 pr-10 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-orange-500/60" />
+            <button type="button" onClick={() => setShowPassword(value => !value)} title={showPassword ? 'Hide password' : 'Show password'} className="absolute inset-y-0 right-0 px-3 text-slate-500 hover:text-white">
+              {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+            </button>
+          </div>
           <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
             className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none">
             <option value="viewer">Viewer (read-only)</option>
@@ -59,11 +65,58 @@ function InviteModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
   )
 }
 
+function PasswordModal({ user, onClose, onDone }: { user: UserRecord; onClose: () => void; onDone: () => void }) {
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true); setError('')
+    const res = await fetch(`/api/users/${user.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    })
+    const data = await res.json()
+    setLoading(false)
+    if (!res.ok) { setError(data.error || 'Failed'); return }
+    onDone()
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-[#111827] border border-slate-700 rounded-2xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-bold text-white">Change Password for {user.name}</h2>
+          <button onClick={onClose}><X size={15} className="text-slate-500 hover:text-white" /></button>
+        </div>
+        <form onSubmit={submit} className="space-y-3">
+          {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">{error}</div>}
+          <div className="relative">
+            <input required type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="New password"
+              className="w-full px-3 py-2 pr-10 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-orange-500/60" />
+            <button type="button" onClick={() => setShowPassword(value => !value)} title={showPassword ? 'Hide password' : 'Show password'} className="absolute inset-y-0 right-0 px-3 text-slate-500 hover:text-white">
+              {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+            </button>
+          </div>
+          <button type="submit" disabled={loading}
+            className="w-full py-2 rounded-xl bg-orange-500 hover:bg-orange-400 disabled:opacity-50 text-white text-sm font-medium">
+            {loading ? 'Updating...' : 'Update Password'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 export default function TeamPage() {
   const { data: me } = useSWR<{ role: string }>('/api/auth/me', fetcher)
   const { data: users = [], mutate } = useSWR<UserRecord[]>('/api/users', fetcher)
   const [showInvite, setShowInvite] = useState(false)
   const [editingRole, setEditingRole] = useState<{ id: string; role: string } | null>(null)
+  const [passwordUser, setPasswordUser] = useState<UserRecord | null>(null)
 
   if (me && me.role !== 'admin') {
     return (
@@ -79,6 +132,11 @@ export default function TeamPage() {
     setEditingRole(null); mutate()
   }
 
+  async function updateActive(user: UserRecord) {
+    await fetch(`/api/users/${user.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !user.active }) })
+    mutate()
+  }
+
   async function deleteUser(id: string) {
     if (!confirm('Delete this user?')) return
     await fetch(`/api/users/${id}`, { method: 'DELETE' })
@@ -88,6 +146,7 @@ export default function TeamPage() {
   return (
     <div className="p-4 sm:p-6 space-y-4 max-w-3xl mx-auto">
       {showInvite && <InviteModal onClose={() => setShowInvite(false)} onDone={() => { setShowInvite(false); mutate() }} />}
+      {passwordUser && <PasswordModal user={passwordUser} onClose={() => setPasswordUser(null)} onDone={() => { setPasswordUser(null); mutate() }} />}
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -147,10 +206,16 @@ export default function TeamPage() {
                 <td className="p-3 text-slate-500 hidden sm:table-cell">{new Date(user.createdAt).toLocaleDateString()}</td>
                 <td className="p-3">
                   <div className="flex items-center justify-center gap-2">
-                    <button onClick={() => setEditingRole({ id: user.id, role: user.role })} className="text-slate-500 hover:text-blue-400">
+                    <button onClick={() => setEditingRole({ id: user.id, role: user.role })} title="Edit Role" className="text-slate-500 hover:text-blue-400">
                       <Edit2 size={12} />
                     </button>
-                    <button onClick={() => deleteUser(user.id)} className="text-slate-500 hover:text-red-400">
+                    <button onClick={() => setPasswordUser(user)} title="Change Password" className="text-slate-500 hover:text-orange-400">
+                      <Key size={12} />
+                    </button>
+                    {user.role !== 'admin' && <button onClick={() => updateActive(user)} title={user.active ? 'Deactivate user' : 'Activate user'} className={user.active ? 'text-slate-500 hover:text-yellow-400' : 'text-red-400 hover:text-green-400'}>
+                      <Power size={12} />
+                    </button>}
+                    <button onClick={() => deleteUser(user.id)} title="Delete User" className="text-slate-500 hover:text-red-400">
                       <Trash2 size={12} />
                     </button>
                   </div>

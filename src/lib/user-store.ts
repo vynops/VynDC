@@ -11,6 +11,7 @@ export interface User {
   role: UserRole
   passwordHash: string
   passwordSalt: string
+  active?: boolean
   createdAt: string
   lastLogin?: string
 }
@@ -57,7 +58,8 @@ export function listUsers(): User[] {
 }
 
 export function findUserByEmail(email: string): User | null {
-  return readUsers().find(u => u.email.toLowerCase() === email.toLowerCase()) ?? null
+  const user = readUsers().find(u => u.email.toLowerCase() === email.toLowerCase())
+  return user ? { ...user, active: user.active !== false } : null
 }
 
 export function findUserById(id: string): User | null {
@@ -82,6 +84,7 @@ export function createUser(data: {
     role: data.role,
     passwordHash: hash,
     passwordSalt: salt,
+    active: true,
     createdAt: new Date().toISOString(),
   }
   users.push(user)
@@ -91,13 +94,20 @@ export function createUser(data: {
 
 export function updateUser(
   id: string,
-  updates: Partial<Pick<User, 'name' | 'role'> & { password?: string }>
+  updates: Partial<Pick<User, 'name' | 'role' | 'active'> & { password?: string }>
 ): User {
   const users = readUsers()
   const idx = users.findIndex(u => u.id === id)
   if (idx === -1) throw new Error('User not found')
   if (updates.name) users[idx].name = updates.name
-  if (updates.role) users[idx].role = updates.role
+  if (updates.role) {
+    users[idx].role = updates.role
+    if (updates.role === 'admin') users[idx].active = true
+  }
+  if (typeof updates.active === 'boolean') {
+    if (users[idx].role === 'admin') throw new Error('Admin accounts cannot be deactivated')
+    users[idx].active = updates.active
+  }
   if (updates.password) {
     const { hash, salt } = hashPassword(updates.password)
     users[idx].passwordHash = hash

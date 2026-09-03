@@ -58,6 +58,11 @@ export async function POST(req: NextRequest) {
       writeAudit({ actor: email, action: 'login.fail', detail: 'User not found', ip })
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 })
     }
+    if (!user.active) {
+      recordFailure(ip)
+      writeAudit({ actor: email, action: 'login.fail', detail: 'Account deactivated', ip })
+      return NextResponse.json({ error: 'This account has been deactivated' }, { status: 403 })
+    }
     const valid = verifyPassword(password, user.passwordHash, user.passwordSalt)
     if (!valid) {
       recordFailure(ip)

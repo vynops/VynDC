@@ -9,7 +9,7 @@ export async function GET(req: NextRequest) {
   if (auth instanceof NextResponse) return auth
   const users = listUsers().map(u => ({
     id: u.id, email: u.email, name: u.name, role: u.role,
-    createdAt: u.createdAt, lastLogin: u.lastLogin,
+    active: u.active !== false, createdAt: u.createdAt, lastLogin: u.lastLogin,
   }))
   return NextResponse.json(users)
 }
