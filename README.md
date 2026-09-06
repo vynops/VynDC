@@ -32,13 +32,19 @@ Built on **Next.js 15 App Router**, VynDC connects directly to your Prometheus s
 
 ## Screenshots
 
-| Overview Dashboard | Incident Management | On-Call Schedule |
-|---|---|---|
-| _(coming soon)_ | _(coming soon)_ | _(coming soon)_ |
-
-| Rack View | SLA Tracker | AI Copilot |
-|---|---|---|
-| _(coming soon)_ | _(coming soon)_ | _(coming soon)_ |
+|  |  |
+|---|---|
+| <a href="screenshots/Screenshot%202026-09-01%20151101.png"><img src="screenshots/Screenshot%202026-09-01%20151101.png" width="100%" alt="01 · Secure Login" /></a><br /><strong>01 · Secure Login</strong> | <a href="screenshots/Screenshot%202026-09-01%20151143.png"><img src="screenshots/Screenshot%202026-09-01%20151143.png" width="100%" alt="02 · Data Center Overview" /></a><br /><strong>02 · Data Center Overview</strong> |
+| <a href="screenshots/Screenshot%202026-09-01%20151217.png"><img src="screenshots/Screenshot%202026-09-01%20151217.png" width="100%" alt="03 · Server Inventory" /></a><br /><strong>03 · Server Inventory</strong> | <a href="screenshots/Screenshot%202026-09-01%20151243.png"><img src="screenshots/Screenshot%202026-09-01%20151243.png" width="100%" alt="04 · Rack Topology" /></a><br /><strong>04 · Rack Topology</strong> |
+| <a href="screenshots/Screenshot%202026-09-01%20151308.png"><img src="screenshots/Screenshot%202026-09-01%20151308.png" width="100%" alt="05 · Asset And Disk Inventory" /></a><br /><strong>05 · Asset And Disk Inventory</strong> | <a href="screenshots/Screenshot%202026-09-01%20151327.png"><img src="screenshots/Screenshot%202026-09-01%20151327.png" width="100%" alt="06 · Power And Cooling" /></a><br /><strong>06 · Power And Cooling</strong> |
+| <a href="screenshots/Screenshot%202026-09-01%20151344.png"><img src="screenshots/Screenshot%202026-09-01%20151344.png" width="100%" alt="07 · Storage Health" /></a><br /><strong>07 · Storage Health</strong> | <a href="screenshots/Screenshot%202026-09-01%20151358.png"><img src="screenshots/Screenshot%202026-09-01%20151358.png" width="100%" alt="08 · Network Interfaces" /></a><br /><strong>08 · Network Interfaces</strong> |
+| <a href="screenshots/Screenshot%202026-09-01%20151418.png"><img src="screenshots/Screenshot%202026-09-01%20151418.png" width="100%" alt="09 · Failure Predictions" /></a><br /><strong>09 · Failure Predictions</strong> | <a href="screenshots/Screenshot%202026-09-01%20151443.png"><img src="screenshots/Screenshot%202026-09-01%20151443.png" width="100%" alt="10 · AI Copilot" /></a><br /><strong>10 · AI Copilot</strong> |
+| <a href="screenshots/Screenshot%202026-09-01%20151507.png"><img src="screenshots/Screenshot%202026-09-01%20151507.png" width="100%" alt="11 · Runbook Automation" /></a><br /><strong>11 · Runbook Automation</strong> | <a href="screenshots/Screenshot%202026-09-01%20151529.png"><img src="screenshots/Screenshot%202026-09-01%20151529.png" width="100%" alt="12 · Runbook Editor" /></a><br /><strong>12 · Runbook Editor</strong> |
+| <a href="screenshots/Screenshot%202026-09-01%20151606.png"><img src="screenshots/Screenshot%202026-09-01%20151606.png" width="100%" alt="13 · Autonomous Ops Policy" /></a><br /><strong>13 · Autonomous Ops Policy</strong> | <a href="screenshots/Screenshot%202026-09-01%20151728.png"><img src="screenshots/Screenshot%202026-09-01%20151728.png" width="100%" alt="14 · Incident Management" /></a><br /><strong>14 · Incident Management</strong> |
+| <a href="screenshots/Screenshot%202026-09-01%20151751.png"><img src="screenshots/Screenshot%202026-09-01%20151751.png" width="100%" alt="15 · Maintenance Windows" /></a><br /><strong>15 · Maintenance Windows</strong> | <a href="screenshots/Screenshot%202026-09-01%20151813.png"><img src="screenshots/Screenshot%202026-09-01%20151813.png" width="100%" alt="16 · On-Call Schedule" /></a><br /><strong>16 · On-Call Schedule</strong> |
+| <a href="screenshots/Screenshot%202026-09-01%20151832.png"><img src="screenshots/Screenshot%202026-09-01%20151832.png" width="100%" alt="17 · Routing And Escalations" /></a><br /><strong>17 · Routing And Escalations</strong> | <a href="screenshots/Screenshot%202026-09-01%20151848.png"><img src="screenshots/Screenshot%202026-09-01%20151848.png" width="100%" alt="18 · SLA Tracker" /></a><br /><strong>18 · SLA Tracker</strong> |
+| <a href="screenshots/Screenshot%202026-09-01%20152001.png"><img src="screenshots/Screenshot%202026-09-01%20152001.png" width="100%" alt="19 · Team Management" /></a><br /><strong>19 · Team Management</strong> | <a href="screenshots/Screenshot%202026-09-01%20152046.png"><img src="screenshots/Screenshot%202026-09-01%20152046.png" width="100%" alt="20 · Infrastructure Settings" /></a><br /><strong>20 · Infrastructure Settings</strong> |
+| <a href="screenshots/Screenshot%202026-09-01%20152108.png"><img src="screenshots/Screenshot%202026-09-01%20152108.png" width="100%" alt="21 · Alerting Settings" /></a><br /><strong>21 · Alerting Settings</strong> | <a href="screenshots/Screenshot%202026-09-01%20152129.png"><img src="screenshots/Screenshot%202026-09-01%20152129.png" width="100%" alt="22 · AI And Audit Settings" /></a><br /><strong>22 · AI And Audit Settings</strong> |
 
 ---
 
