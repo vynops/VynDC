@@ -130,7 +130,7 @@ function SidebarContent({ pathname, onClose }: SidebarContentProps) {
           <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-600">
             Admin
           </div>
-          {BOTTOM_ITEMS.map(item => (
+          {BOTTOM_ITEMS.filter(item => item.href !== '/settings' || me?.role === 'admin').map(item => (
             <NavLink key={item.href} item={item} active={pathname === item.href} onClick={onClose} />
           ))}
         </div>

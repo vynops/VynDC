@@ -6,7 +6,7 @@ import { writeAudit, getClientIp } from '@/lib/audit'
 const MASKED = '***configured***'
 
 export async function GET(req: NextRequest) {
-  const auth = await requireRole(req, 'viewer')
+  const auth = await requireRole(req, 'admin')
   if (auth instanceof NextResponse) return auth
   const settings = getSettings()
   // Mask API keys in responses
