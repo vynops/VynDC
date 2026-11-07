@@ -5,7 +5,11 @@ import { AlertTriangle, CheckCircle, Clock, Download, Search, RotateCcw, X, User
 import type { Incident } from '@/lib/simulation'
 import { exportCsv } from '@/lib/utils'
 
-const fetcher = (url: string) => fetch(url).then(r => r.json())
+const fetcher = async (url: string) => {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Unable to load incident data')
+  return response.json()
+}
 
 const SEV_BADGE: Record<string, string> = {
   critical: 'bg-red-500/20 text-red-400 border border-red-500/30',
@@ -33,6 +37,7 @@ interface ActionModalProps {
   nextStatus: 'acknowledged' | 'resolved'
   onClose: () => void
   onConfirm: (notes: string) => Promise<void>
+  error: string | null
 }
 
 interface AssignModalProps {
@@ -41,9 +46,10 @@ interface AssignModalProps {
   me: { email: string; name: string } | null
   onClose: () => void
   onConfirm: (assignTo: string) => Promise<void>
+  error: string | null
 }
 
-function AssignModal({ incident, allShifts, me, onClose, onConfirm }: AssignModalProps) {
+function AssignModal({ incident, allShifts, me, onClose, onConfirm, error }: AssignModalProps) {
   const [custom, setCustom] = useState('')
   const [selected, setSelected] = useState<string>('')
   const [saving, setSaving] = useState(false)
@@ -62,8 +68,7 @@ function AssignModal({ incident, allShifts, me, onClose, onConfirm }: AssignModa
     const target = selected || custom.trim()
     if (!target) return
     setSaving(true)
-    await onConfirm(target)
-    setSaving(false)
+    try { await onConfirm(target) } finally { setSaving(false) }
   }
 
   const pick = (email: string) => { setSelected(email); setCustom('') }
@@ -145,6 +150,7 @@ function AssignModal({ incident, allShifts, me, onClose, onConfirm }: AssignModa
             />
           </div>
 
+          {error && <p role="alert" className="text-xs text-red-400 break-words">{error}</p>}
           <div className="flex gap-2 pt-1">
             <button type="button" onClick={onClose}
               className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium">
@@ -161,15 +167,14 @@ function AssignModal({ incident, allShifts, me, onClose, onConfirm }: AssignModa
   )
 }
 
-function ActionModal({ incident, nextStatus, onClose, onConfirm }: ActionModalProps) {
+function ActionModal({ incident, nextStatus, onClose, onConfirm, error }: ActionModalProps) {
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
-    await onConfirm(notes)
-    setSaving(false)
+    try { await onConfirm(notes) } finally { setSaving(false) }
   }
 
   const isAck = nextStatus === 'acknowledged'
@@ -213,6 +218,7 @@ function ActionModal({ incident, nextStatus, onClose, onConfirm }: ActionModalPr
               className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-orange-500/60 resize-none"
             />
           </div>
+          {error && <p role="alert" className="text-xs text-red-400 break-words">{error}</p>}
           <div className="flex gap-2">
             <button type="button" onClick={onClose}
               className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium">
@@ -230,15 +236,18 @@ function ActionModal({ incident, nextStatus, onClose, onConfirm }: ActionModalPr
 }
 
 export default function IncidentsPage() {
-  const { data: incidents = [], mutate } = useSWR<IncidentExt[]>('/api/incidents', fetcher, { refreshInterval: 30000 })
+  const { data: incidents = [], mutate, error: loadError } = useSWR<IncidentExt[]>('/api/incidents', fetcher, { refreshInterval: 30000 })
   const { data: oncallData } = useSWR<{ shifts: Shift[] }>('/api/oncall', fetcher)
-  const { data: me } = useSWR<{ email: string; name: string }>('/api/auth/me', fetcher)
+  const { data: me } = useSWR<{ email: string; name: string; role: string }>('/api/auth/me', fetcher)
   const [search, setSearch] = useState('')
   const [filterSeverity, setFilterSeverity] = useState('all')
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterCat, setFilterCat] = useState('all')
   const [actionTarget, setActionTarget] = useState<{ inc: IncidentExt; next: 'acknowledged' | 'resolved' } | null>(null)
   const [assignTarget, setAssignTarget] = useState<IncidentExt | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [savingAction, setSavingAction] = useState(false)
+  const canEdit = me?.role === 'editor' || me?.role === 'admin'
 
   const now = new Date()
   const activeShifts = (oncallData?.shifts ?? []).filter(
@@ -257,22 +266,30 @@ export default function IncidentsPage() {
   const counts = { open: 0, acknowledged: 0, resolved: 0 }
   incidents.forEach(i => counts[i.status]++)
 
-  async function applyStatus(id: string, status: string, notes?: string) {
-    await fetch('/api/incidents', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, status, notes }),
-    })
-    mutate()
+  async function patchIncident(inc: IncidentExt, fields: Record<string, unknown>): Promise<boolean> {
+    setActionError(null)
+    setSavingAction(true)
+    try {
+      const response = await fetch('/api/incidents', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: inc.id, createdAt: inc.createdAt, ...fields }),
+      })
+      const result = await response.json().catch(() => ({})) as { error?: string }
+      if (!response.ok) throw new Error(result.error ?? 'Unable to save incident action')
+      await mutate()
+      return true
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to save incident action')
+      return false
+    } finally { setSavingAction(false) }
+  }
+
+  async function applyStatus(inc: IncidentExt, status: string, notes?: string) {
+    return patchIncident(inc, { status, notes })
   }
 
   async function applyAssign(inc: IncidentExt, assignTo: string) {
-    await fetch('/api/incidents', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: inc.id, assignTo, _title: inc.title, _severity: inc.severity, _hostname: inc.hostname }),
-    })
-    mutate()
+    return patchIncident(inc, { assignTo })
   }
 
   function doExport() {
@@ -285,6 +302,7 @@ export default function IncidentsPage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-4 max-w-7xl mx-auto">
+      {(actionError || loadError) && <p role="alert" className="text-sm text-red-400 break-words">{actionError ?? 'Unable to load incidents. Try refreshing.'}</p>}
       {/* Summary badges */}
       <div className="flex flex-wrap gap-2">
         {(Object.entries(counts) as [string, number][]).map(([st, c]) => (
@@ -321,7 +339,7 @@ export default function IncidentsPage() {
       <div className="space-y-2">
         {filtered.length === 0 && <div className="bg-[#111827] border border-slate-800/60 rounded-2xl p-8 text-center text-slate-500 text-sm">No incidents found</div>}
         {filtered.map(inc => (
-          <div key={inc.id} className="bg-[#111827] border border-slate-800/60 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-start gap-3">
+          <div key={`${inc.id}:${inc.createdAt}`} className="bg-[#111827] border border-slate-800/60 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-start gap-3">
             <div className="flex-1 min-w-0 space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${SEV_BADGE[inc.severity]}`}>{inc.severity.toUpperCase()}</span>
@@ -353,7 +371,7 @@ export default function IncidentsPage() {
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              {inc.status !== 'resolved' && (
+              {canEdit && inc.status !== 'resolved' && (
                 inc.assignedTo ? (
                   <button onClick={() => setAssignTarget(inc)}
                     title={`Assigned to ${inc.assignedTo} — click to reassign`}
@@ -368,20 +386,20 @@ export default function IncidentsPage() {
                   </button>
                 )
               )}
-              {inc.status === 'open' && (
+              {canEdit && inc.status === 'open' && (
                 <button onClick={() => setActionTarget({ inc, next: 'acknowledged' })}
                   className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-400 text-xs font-medium transition-colors">
                   <AlertTriangle size={11} /> Acknowledge
                 </button>
               )}
-              {inc.status !== 'resolved' && (
+              {canEdit && inc.status !== 'resolved' && (
                 <button onClick={() => setActionTarget({ inc, next: 'resolved' })}
                   className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-green-500/10 hover:bg-green-500/20 text-green-400 text-xs font-medium transition-colors">
                   <CheckCircle size={11} /> Resolve
                 </button>
               )}
-              {inc.status === 'resolved' && (
-                <button onClick={() => applyStatus(inc.id, 'open')}
+              {canEdit && inc.status === 'resolved' && (
+                <button disabled={savingAction} onClick={() => applyStatus(inc, 'open')}
                   className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-600/60 text-slate-400 hover:text-white text-xs font-medium transition-colors">
                   <RotateCcw size={11} /> Re-open
                 </button>
@@ -396,10 +414,10 @@ export default function IncidentsPage() {
         <ActionModal
           incident={actionTarget.inc}
           nextStatus={actionTarget.next}
+          error={actionError}
           onClose={() => setActionTarget(null)}
           onConfirm={async (notes) => {
-            await applyStatus(actionTarget.inc.id, actionTarget.next, notes)
-            setActionTarget(null)
+            if (await applyStatus(actionTarget.inc, actionTarget.next, notes)) setActionTarget(null)
           }}
         />
       )}
@@ -408,10 +426,10 @@ export default function IncidentsPage() {
           incident={assignTarget}
           allShifts={oncallData?.shifts ?? []}
           me={me ?? null}
+          error={actionError}
           onClose={() => setAssignTarget(null)}
           onConfirm={async (assignTo) => {
-            await applyAssign(assignTarget, assignTo)
-            setAssignTarget(null)
+            if (await applyAssign(assignTarget, assignTo)) setAssignTarget(null)
           }}
         />
       )}

@@ -18,7 +18,7 @@ function resolveConfig(body: { provider?: string; apiKey?: string; model?: strin
   if (!apiKey || apiKey === MASKED) {
     apiKey = settings.aiApiKey || settings.groqApiKey || process.env.GROQ_API_KEY || ''
   }
-  const model = body.model?.trim() || settings.aiModel || 'llama-3.3-70b-versatile'
+  const model = body.model?.trim() || settings.aiModel || 'openai/gpt-oss-20b'
   const baseUrl = body.baseUrl?.trim() || settings.aiBaseUrl || ''
   return { provider, apiKey, model, baseUrl }
 }

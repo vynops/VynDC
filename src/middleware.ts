@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { jwtVerify } from 'jose'
 
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout']
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/api/auth/change-password']
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))
@@ -23,7 +23,19 @@ export async function middleware(request: NextRequest) {
     const secret = new TextEncoder().encode(
       process.env.VYNDC_SECRET ?? 'vyndc-fallback-dev-secret-change-in-prod'
     )
-    await jwtVerify(token, secret)
+    const { payload } = await jwtVerify(token, secret)
+    if (payload.mustChangePassword === true) {
+      if (pathname === '/change-password') return NextResponse.next()
+      if (pathname.startsWith('/api/')) {
+        return NextResponse.json(
+          { error: 'Change your password before continuing.', code: 'PASSWORD_CHANGE_REQUIRED' },
+          { status: 403 }
+        )
+      }
+      const changePasswordUrl = request.nextUrl.clone()
+      changePasswordUrl.pathname = '/change-password'
+      return NextResponse.redirect(changePasswordUrl)
+    }
     return NextResponse.next()
   } catch {
     const loginUrl = request.nextUrl.clone()

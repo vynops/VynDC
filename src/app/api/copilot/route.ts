@@ -16,6 +16,15 @@ import {
   promQuery,
   alertmanagerAlerts,
 } from '@/lib/prometheus'
+import {
+  buildFailureRiskNotice,
+  copilotSourceForQuery,
+  formatCopilotDataSources,
+  isFailureRiskQuestion,
+  normalizeAlertSeverity,
+  type CopilotDataSources,
+  type FailureTelemetryCoverage,
+} from '@/lib/copilot-data-sources'
 
 type Message = { role: 'user' | 'assistant' | 'system'; content: string }
 type ClientMessage = { role: 'user' | 'assistant'; content: string }
@@ -36,7 +45,7 @@ function normalizeProvider(value: string | undefined): AIProvider {
 function resolveAiConfig(settings: ReturnType<typeof getSettings>) {
   const provider = normalizeProvider(settings.aiProvider)
   const apiKey = settings.aiApiKey || settings.groqApiKey || process.env.GROQ_API_KEY || ''
-  const model = settings.aiModel || 'llama-3.3-70b-versatile'
+  const model = settings.aiModel || 'openai/gpt-oss-20b'
   const baseUrl = settings.aiBaseUrl?.trim() || ''
   return { provider, apiKey, model, baseUrl }
 }
@@ -271,7 +280,8 @@ type Snapshot = {
   servers: SlimServer[]
   incidents: SlimIncident[]
   predictions: ReturnType<typeof simulatedPredictions>
-  dataSource: 'live' | 'simulation'
+  dataSources: CopilotDataSources
+  failureTelemetry: FailureTelemetryCoverage
 }
 
 async function fetchSnapshot(): Promise<Snapshot> {
@@ -285,19 +295,39 @@ async function fetchSnapshot(): Promise<Snapshot> {
   let incidents: SlimIncident[] = simulatedIncidents()
     .filter(i => i.status !== 'resolved').slice(0, 8)
     .map(i => ({ title: i.title, severity: i.severity, hostname: i.hostname, description: i.description }))
-  const predictions = simulatedPredictions().slice(0, 5)
-  let dataSource: 'live' | 'simulation' = 'simulation'
+  let predictions = simulatedPredictions().slice(0, 5)
+  const dataSources: CopilotDataSources = {
+    infrastructure: 'simulation',
+    incidents: 'simulation',
+    predictions: 'simulation',
+  }
+  const failureTelemetry: FailureTelemetryCoverage = {
+    diskSmart: false,
+    memoryEcc: false,
+    thermal: false,
+    psu: false,
+  }
 
   if (isPrometheusConfigured()) {
     try {
-      const [cpuIdle, memTotal, memAvail, diskTotal, diskAvail] = await Promise.all([
+      const [cpuIdle, memTotal, memAvail, diskTotal, diskAvail, nodeInfo, diskSmart, memoryEcc, thermal, psu] = await Promise.all([
         promQuery('avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100'),
         promQuery('node_memory_MemTotal_bytes'),
         promQuery('node_memory_MemAvailable_bytes'),
         promQuery('node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}'),
         promQuery('node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}'),
+        promQuery('node_uname_info'),
+        promQuery('smartctl_device_smart_healthy'),
+        promQuery('node_edac_correctable_errors_total'),
+        promQuery('node_hwmon_temp_celsius'),
+        promQuery('node_power_supply_online'),
       ])
       const insts = [...new Set(memTotal.map(r => r.metric.instance))].filter(Boolean)
+      if (insts.length === 0) throw new Error('Prometheus returned no server memory metrics')
+      failureTelemetry.diskSmart = diskSmart.length > 0
+      failureTelemetry.memoryEcc = memoryEcc.length > 0
+      failureTelemetry.thermal = thermal.length > 0
+      failureTelemetry.psu = psu.length > 0
       let healthy = 0, warning = 0, critical = 0
       servers = insts.map(inst => {
         const idle = parseFloat(cpuIdle.find(r => r.metric.instance === inst)?.value[1] ?? '50')
@@ -307,13 +337,15 @@ async function fetchSnapshot(): Promise<Snapshot> {
         const memPct = mt > 0 ? Math.round((mt - ma) / mt * 100) : 0
         const status = cpu > 90 || memPct > 95 ? 'critical' : cpu > 75 || memPct > 80 ? 'warning' : 'healthy'
         if (status === 'critical') critical++; else if (status === 'warning') warning++; else healthy++
-        return { hostname: inst.split(':')[0], rack: 'live', status, cpuUsagePct: cpu, memUsedPct: memPct }
+        const hostname = nodeInfo.find(r => r.metric.instance === inst)?.metric.nodename ?? inst.split(':')[0]
+        return { hostname, rack: 'not-reported', status, cpuUsagePct: cpu, memUsedPct: memPct }
       })
       const totalDisk = diskTotal.reduce((s, r) => s + parseFloat(r.value[1]), 0)
       const availDisk = diskAvail.reduce((s, r) => s + parseFloat(r.value[1]), 0)
       const storageUsedPct = totalDisk > 0 ? Math.round((totalDisk - availDisk) / totalDisk * 100) : simOverview.storageUsedPct
       overview = { ...simOverview, totalServers: insts.length, healthyServers: healthy, warningServers: warning, criticalServers: critical, offlineServers: 0, storageUsedPct }
-      dataSource = 'live'
+      dataSources.infrastructure = 'live'
+      predictions = []
     } catch (e) {
       console.error('[copilot] Prometheus error, using simulation:', e)
     }
@@ -325,7 +357,7 @@ async function fetchSnapshot(): Promise<Snapshot> {
       const active = rawAlerts.filter(a => a.status.state === 'active')
       incidents = active.slice(0, 8).map(a => ({
         title: a.annotations.summary ?? a.labels.alertname ?? 'Alert',
-        severity: (['critical','high','medium','low'].includes(a.labels.severity) ? a.labels.severity : 'medium'),
+        severity: normalizeAlertSeverity(a.labels.severity),
         hostname: a.labels.instance ?? a.labels.node,
         description: a.annotations.description ?? a.annotations.message ?? '',
       }))
@@ -334,28 +366,29 @@ async function fetchSnapshot(): Promise<Snapshot> {
         openIncidents: active.length,
         criticalIncidents: active.filter(a => a.labels.severity === 'critical').length,
       }
-      dataSource = 'live'
+      dataSources.incidents = 'live'
     } catch (e) {
       console.error('[copilot] Alertmanager error, using simulation:', e)
     }
   }
 
-  return { overview, servers, incidents, predictions, dataSource }
+  return { overview, servers, incidents, predictions, dataSources, failureTelemetry }
 }
 
 function buildSystemPrompt(snap: Snapshot): string {
-  const { overview, servers, incidents, predictions, dataSource } = snap
+  const { overview, servers, incidents, predictions, dataSources } = snap
   const critServers = servers.filter(s => s.status === 'critical' || s.status === 'warning')
   const generatedAt = new Date().toISOString()
   return `You are VynDC Copilot, an AI assistant for datacenter operations.
-Data source: ${dataSource === 'live' ? 'LIVE (Prometheus + Alertmanager)' : 'simulation (Prometheus not reachable)'}.
+Data source by domain: ${formatCopilotDataSources(dataSources)}.
 Snapshot time (UTC): ${generatedAt}
 
-## Current Datacenter State
-- Total Servers: ${overview.totalServers} (Healthy: ${overview.healthyServers}, Warning: ${overview.warningServers}, Critical: ${overview.criticalServers}, Offline: ${overview.offlineServers})
+## Current Infrastructure State
+- Monitored nodes: ${overview.totalServers} (Healthy: ${overview.healthyServers}, Warning: ${overview.warningServers}, Critical: ${overview.criticalServers}). These are monitoring targets, not confirmed datacenter inventory assets.
+- Physical fleet inventory mapping: unknown from current telemetry. Offline physical server count is unknown.
 - Open Incidents: ${overview.openIncidents} (${overview.criticalIncidents} critical)
 - Storage Used: ${overview.storageUsedPct}%
-${dataSource === 'simulation' ? `- PUE: ${overview.avgPue} | Avg Temp: ${overview.avgTempCelsius}°C | Power: ${overview.totalPowerKw} kW` : ''}
+- PUE: ${overview.avgPue} | Avg Temp: ${overview.avgTempCelsius}°C | Power: ${overview.totalPowerKw} kW (simulation estimates only)
 
 ## Servers Requiring Attention${critServers.length === 0 ? '\n- All servers healthy' : ''}
 ${critServers.map(s => `- ${s.hostname}: ${s.status.toUpperCase()}, CPU ${s.cpuUsagePct}%, Mem ${s.memUsedPct}%`).join('\n')}
@@ -363,14 +396,19 @@ ${critServers.map(s => `- ${s.hostname}: ${s.status.toUpperCase()}, CPU ${s.cpuU
 ## Open Incidents (up to 8)${incidents.length === 0 ? '\n- No active incidents' : ''}
 ${incidents.map(i => `- [${i.severity.toUpperCase()}] ${i.title}${i.hostname ? ` — ${i.hostname}` : ''}: ${i.description}`).join('\n')}
 
-## Active Failure Predictions (top 5)
-${predictions.map(p => `- ${p.hostname} (${p.rack}): ${p.component} failure in ~${p.estimatedDaysToFailure} days (${p.confidence}% confidence) — ${p.reason}`).join('\n')}
+## Failure Prediction Data
+${predictions.length > 0 ? `Simulation-only predictions (not live evidence):\n${predictions.map(p => `- ${p.hostname} (${p.rack}): ${p.component} failure in ~${p.estimatedDaysToFailure} days (${p.confidence}% simulation confidence) — ${p.reason}`).join('\n')}` : `No live failure prediction model is configured. Component metrics available: disk SMART=${snap.failureTelemetry.diskSmart}, memory ECC=${snap.failureTelemetry.memoryEcc}, temperature=${snap.failureTelemetry.thermal}, PSU=${snap.failureTelemetry.psu}.`}
 
 ## Response Rules
 - Use only the data in this prompt.
 - If data is missing or uncertain, explicitly say: "Unknown from current telemetry".
 - Separate observed facts from inferred recommendations.
 - Mention whether guidance is based on live data or simulation data.
+- Never describe a domain as live unless its domain-specific source above says live.
+- Predictions, PUE, temperature, and power estimates in this prompt are simulated, even when other domains are live.
+- Do not call monitored nodes datacenter servers unless their mapping to physical inventory is present.
+- Never infer disk, ECC, temperature, or PSU failures from CPU/memory utilization alone.
+- When live infrastructure is active and no live failure model exists, state that physical failure risk cannot be verified; do not repeat simulated host predictions or recommend hardware replacement.
 - Prefer concise operator-ready output.
 
 ## Required Output Format
@@ -407,14 +445,15 @@ function sanitizeMessages(input: unknown): ClientMessage[] {
 
 function buildDataDrivenResponse(snap: Snapshot, query: string): string {
   const lower = query.toLowerCase()
-  const { overview, servers, incidents, dataSource } = snap
-  const src = dataSource === 'live' ? 'live data' : 'simulation data'
+  const { overview, servers, incidents, dataSources } = snap
+  const src = copilotSourceForQuery(query, dataSources)
   const critServers = servers.filter(s => s.status === 'critical')
   const warnServers = servers.filter(s => s.status === 'warning')
 
   if (lower.includes('risk') || lower.includes('at risk') || lower.includes('failure') || lower.includes('which server')) {
     const atRisk = [...critServers, ...warnServers]
-    if (atRisk.length === 0) return `✅ Based on ${src}, all ${overview.totalServers} servers are currently healthy — no elevated risk detected.`
+    const entity = dataSources.infrastructure === 'live' ? 'monitored nodes' : 'simulated servers'
+    if (atRisk.length === 0) return `✅ Based on ${src}, all ${overview.totalServers} ${entity} are currently healthy for the CPU/memory checks available; this does not verify component failure risk.`
     const lines = atRisk.map(s => `- **${s.hostname}**: ${s.status.toUpperCase()} — CPU ${s.cpuUsagePct}%, Mem ${s.memUsedPct}%`)
     return `Based on ${src}, ${atRisk.length} server${atRisk.length > 1 ? 's are' : ' is'} at risk:\n\n${lines.join('\n')}\n\n${critServers.length > 0 ? `⚠️ ${critServers.length} critical — immediate attention recommended.` : 'No critical servers; monitor closely.'}`
   }
@@ -434,7 +473,8 @@ function buildDataDrivenResponse(snap: Snapshot, query: string): string {
   }
 
   // Generic fallback with real counts
-  return `I'm the VynDC AI Copilot. Based on ${src}: **${overview.totalServers}** servers monitored, **${overview.openIncidents}** open incidents, **${overview.storageUsedPct}%** storage used. Ask me about server risk, incidents, storage, or datacenter health. _(Add an AI provider key in Settings for full AI responses.)_`
+  const entity = dataSources.infrastructure === 'live' ? 'monitored nodes' : 'simulated servers'
+  return `I'm the VynDC AI Copilot. Based on ${src}: **${overview.totalServers}** ${entity} monitored, **${overview.openIncidents}** open incidents, **${overview.storageUsedPct}%** storage used. Ask me about node status, incidents, or storage. _(Add an AI provider key in Settings for full AI responses.)_`
 }
 
 export async function POST(req: NextRequest) {
@@ -457,8 +497,16 @@ export async function POST(req: NextRequest) {
     // Fetch live data once — used for both the Groq system prompt and the no-key fallback
     const snapshot = await fetchSnapshot()
 
+    if (isFailureRiskQuestion(lastUserMsg) && snapshot.dataSources.infrastructure === 'live' && snapshot.dataSources.predictions === 'simulation') {
+      return NextResponse.json({
+        message: buildFailureRiskNotice(snapshot.servers, snapshot.failureTelemetry),
+        demo: true,
+        dataSources: snapshot.dataSources,
+      })
+    }
+
     if (!apiKey) {
-      return NextResponse.json({ message: buildDataDrivenResponse(snapshot, lastUserMsg), demo: true })
+      return NextResponse.json({ message: buildDataDrivenResponse(snapshot, lastUserMsg), demo: true, dataSources: snapshot.dataSources })
     }
 
     const systemPrompt = buildSystemPrompt(snapshot)
@@ -471,13 +519,13 @@ export async function POST(req: NextRequest) {
     )
 
     if (!completion.ok || !completion.content) {
-      return NextResponse.json({ message: buildDataDrivenResponse(snapshot, lastUserMsg), demo: true })
+      return NextResponse.json({ message: buildDataDrivenResponse(snapshot, lastUserMsg), demo: true, dataSources: snapshot.dataSources })
     }
 
     if (completion.promptTokens > 0 || completion.completionTokens > 0) {
       recordUsage(completion.promptTokens, completion.completionTokens)
     }
-    return NextResponse.json({ message: completion.content, demo: false })
+    return NextResponse.json({ message: completion.content, demo: false, dataSources: snapshot.dataSources })
   } catch {
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }

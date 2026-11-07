@@ -73,7 +73,7 @@ const DEFAULTS: AppSettings = {
   smtpFrom: '',
   // AI Copilot
   aiProvider: 'groq',
-  aiModel: 'llama-3.3-70b-versatile',
+  aiModel: 'openai/gpt-oss-20b',
   aiApiKey: process.env.GROQ_API_KEY ?? '',
   aiBaseUrl: '',
   groqApiKey: process.env.GROQ_API_KEY ?? '',
@@ -93,7 +93,11 @@ export function getSettings(): AppSettings {
   if (!fs.existsSync(SETTINGS_FILE)) return { ...DEFAULTS }
   try {
     const raw = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) as Partial<AppSettings>
-    return { ...DEFAULTS, ...raw }
+    const settings = { ...DEFAULTS, ...raw }
+    if (settings.aiProvider === 'groq' && settings.aiModel === 'llama-3.3-70b-versatile') {
+      settings.aiModel = DEFAULTS.aiModel
+    }
+    return settings
   } catch {
     return { ...DEFAULTS }
   }

@@ -4,6 +4,8 @@
  */
 import fs from 'fs'
 import path from 'path'
+import type { Incident } from './simulation'
+import { writeJson } from './json-store'
 
 const DATA = path.join(process.cwd(), 'data')
 const ensure = () => { if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true }) }
@@ -166,13 +168,17 @@ export interface SeenAlert {
   firstSeenAt: string          // ISO — when we first saw this alert
   severity: string
   title: string
-  notifiedAt: string           // ISO — last notification sent
+  notifiedAt: string           // ISO - last scheduling/suppression observation, not delivery confirmation
   escalationStep: number       // index of next escalation step to fire
   acknowledged: boolean
   resolved: boolean
-  ackBreachNotified: boolean   // sent SLA ack-breach notification?
+  ackBreachNotified: boolean   // breach scheduling/suppression guard; delivery is tracked in the queue
   resolveBreachNotified: boolean
+  incident?: Incident
+  missingCount?: number
+  slaPauseStartedAt?: number
+  slaPausedMs?: number
 }
 
 export function loadSeenAlerts(): Record<string, SeenAlert> { return load('seen-alerts.json', {}) }
-export function saveSeenAlerts(s: Record<string, SeenAlert>) { save('seen-alerts.json', s) }
+export function saveSeenAlerts(s: Record<string, SeenAlert>) { writeJson(path.join(DATA, 'seen-alerts.json'), s) }

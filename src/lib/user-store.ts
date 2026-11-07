@@ -12,6 +12,7 @@ export interface User {
   passwordHash: string
   passwordSalt: string
   active?: boolean
+  mustChangePassword?: boolean
   createdAt: string
   lastLogin?: string
 }
@@ -71,6 +72,7 @@ export function createUser(data: {
   name: string
   role: UserRole
   password: string
+  mustChangePassword?: boolean
 }): User {
   const users = readUsers()
   if (users.find(u => u.email.toLowerCase() === data.email.toLowerCase())) {
@@ -85,6 +87,7 @@ export function createUser(data: {
     passwordHash: hash,
     passwordSalt: salt,
     active: true,
+    mustChangePassword: data.mustChangePassword ?? false,
     createdAt: new Date().toISOString(),
   }
   users.push(user)
@@ -94,7 +97,7 @@ export function createUser(data: {
 
 export function updateUser(
   id: string,
-  updates: Partial<Pick<User, 'name' | 'role' | 'active'> & { password?: string }>
+  updates: Partial<Pick<User, 'name' | 'role' | 'active' | 'mustChangePassword'> & { password?: string }>
 ): User {
   const users = readUsers()
   const idx = users.findIndex(u => u.id === id)
@@ -107,6 +110,9 @@ export function updateUser(
   if (typeof updates.active === 'boolean') {
     if (users[idx].role === 'admin') throw new Error('Admin accounts cannot be deactivated')
     users[idx].active = updates.active
+  }
+  if (typeof updates.mustChangePassword === 'boolean') {
+    users[idx].mustChangePassword = updates.mustChangePassword
   }
   if (updates.password) {
     const { hash, salt } = hashPassword(updates.password)
@@ -143,6 +149,6 @@ export function ensureAdminExists(): void {
   if (!email || !password) return
   const existing = findUserByEmail(email)
   if (!existing) {
-    createUser({ email, name: 'Admin', role: 'admin', password })
+    createUser({ email, name: 'Admin', role: 'admin', password, mustChangePassword: true })
   }
 }

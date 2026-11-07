@@ -22,11 +22,11 @@ export default function LoginPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       })
-      const data = await res.json() as { ok?: boolean; error?: string }
+      const data = await res.json() as { ok?: boolean; error?: string; mustChangePassword?: boolean }
       if (!res.ok) {
         setError(data.error ?? 'Login failed')
       } else {
-        router.push('/overview')
+        router.push(data.mustChangePassword ? '/change-password' : '/overview')
         router.refresh()
       }
     } catch {
@@ -99,12 +99,6 @@ export default function LoginPage() {
             {loading ? <><Loader2 size={14} className="animate-spin" /> Signing in...</> : 'Sign In'}
           </button>
         </form>
-
-        {/* First-time setup hint */}
-        <div className="mt-4 bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-3 text-xs text-blue-300 space-y-1">
-          <div className="font-semibold text-blue-200">First-time setup</div>
-          <div>Set <code className="text-blue-100">VYNDC_ADMIN_EMAIL</code> and <code className="text-blue-100">VYNDC_ADMIN_PASSWORD</code> in <code className="text-blue-100">.env.local</code> — the admin account is created automatically on first boot.</div>
-        </div>
 
         {/* Family footer */}
         <p className="text-center text-xs text-slate-600 mt-4">

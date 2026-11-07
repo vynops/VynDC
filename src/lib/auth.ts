@@ -8,6 +8,7 @@ export interface SessionPayload {
   email: string
   name: string
   role: 'admin' | 'editor' | 'viewer'
+  mustChangePassword?: boolean
   iat?: number
   exp?: number
 }
@@ -25,7 +26,7 @@ export function sessionCookieName(): string {
 }
 
 export async function createSession(
-  payload: Pick<SessionPayload, 'id' | 'email' | 'name' | 'role'>
+  payload: Pick<SessionPayload, 'id' | 'email' | 'name' | 'role'> & Partial<Pick<SessionPayload, 'mustChangePassword'>>
 ): Promise<string> {
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: 'HS256' })

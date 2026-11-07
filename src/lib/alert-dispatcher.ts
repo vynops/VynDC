@@ -1,28 +1,29 @@
 /**
  * alert-dispatcher.ts — Core incident management engine
  *
- * Called after every incidents fetch. For each active incident:
- *  1. NEW alert  → send initial Slack + email via routing rule
- *  2. SLA breach → send ack-breach / resolve-breach notification
- *  3. Escalation → fire escalation steps based on elapsed time
+ * Called by the worker and successful live incident reads. For each incident:
+ *  1. NEW alert: enqueue routed channel deliveries
+ *  2. SLA breach: enqueue acknowledgement/resolution breach deliveries
+ *  3. Escalation: enqueue bounded policy steps based on elapsed time
  *
  * Guards:
  *  - File-based cooldown: only dispatches once per COOLDOWN_SECONDS
  *  - Catch-up suppression: first-seen old alerts skip historical notifications
  *  - Escalation cap: won't re-fire a step already fired
  *
- * All notification I/O is fire-and-forget (non-blocking).
+ * Network delivery and retries run independently from the persisted queue.
  */
-import { sendWebhookNotifications, sendEmail } from './notifier'
+import { enqueueNotification } from './notification-queue'
 import {
   loadSeenAlerts, saveSeenAlerts,
   matchRouting, loadSla, findPolicy,
   currentOnCallEmails,
-  type SeenAlert,
 } from './oncall-store'
 import { getSettings } from './settings-store'
 import { isUnderMaintenance, isSlapaused } from './maintenance-store'
-import type { Incident } from './simulation'
+import { archiveIncident as appendToHistory, type StoredIncident as Incident } from './incident-store'
+import { withStoreLock } from './json-store'
+import { writeAuditSync } from './audit'
 import fs from 'fs'
 import path from 'path'
 
@@ -30,26 +31,6 @@ import path from 'path'
 const COOLDOWN_SECONDS = 55
 
 const LOCK_FILE    = path.join(process.cwd(), 'data', 'dispatch-lock.json')
-const HISTORY_FILE = path.join(process.cwd(), 'data', 'incident-history.json')
-
-/** Append a resolved incident to incident-history.json (max 500 records) */
-function appendToHistory(inc: Incident): void {
-  try {
-    const dir = path.dirname(HISTORY_FILE)
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    let history: Incident[] = []
-    if (fs.existsSync(HISTORY_FILE)) {
-      try { history = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) } catch { history = [] }
-    }
-    if (!history.find(h => h.id === inc.id)) {
-      history.unshift({ ...inc, status: 'resolved', resolvedAt: inc.resolvedAt ?? new Date().toISOString() })
-      if (history.length > 500) history = history.slice(0, 500)
-      fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8')
-    }
-  } catch (e) {
-    console.error('[dispatcher] history write error:', e)
-  }
-}
 
 function readLock(): number {
   try {
@@ -72,13 +53,15 @@ function formatMsg(prefix: string, inc: Incident): string {
   return `${prefix} *[${sev}]* ${inc.title}${host}\nCategory: ${inc.category} | Status: ${inc.status}`
 }
 
-function plainText(s: string) { return s.replace(/\*/g, '').replace(/`/g, '') }
-
 /**
  * Dispatch notifications for a batch of active incidents.
- * Saves seen-alert state. Fires all I/O async without awaiting.
+ * Saves scheduling state after notification jobs are persisted.
  */
 export function dispatchAlerts(incidents: Incident[]): void {
+  return withStoreLock('incident-dispatch', () => dispatchBatch(incidents))
+}
+
+function dispatchBatch(incidents: Incident[]): void {
   // ── Cooldown guard: skip if ran recently ──────────────────────
   const now = Date.now()
   if (now - readLock() < COOLDOWN_SECONDS * 1000) return
@@ -86,17 +69,35 @@ export function dispatchAlerts(incidents: Incident[]): void {
 
   const seen   = loadSeenAlerts()
   const sla    = loadSla()
-  const notify: (() => Promise<void>)[] = []
   const settings = getSettings()
-
-  // Default recipients from settings (fallback when routing has no emails)
-  const defaultEmails = (settings.alertRecipients ?? '')
-    .split(',').map(s => s.trim()).filter(Boolean)
+  const defaultEmails = (settings.alertRecipients ?? '').split(',').map(value => value.trim()).filter(Boolean)
+  const activeIds = new Set(incidents.map(incident => incident.id))
+  for (const [id, entry] of Object.entries(seen)) {
+    if (activeIds.has(id)) continue
+    entry.missingCount = (entry.missingCount ?? 0) + 1
+    if (entry.missingCount < 2) continue
+    const previous: Incident = entry.incident ?? {
+      id, title: entry.title, severity: entry.severity as Incident['severity'],
+      createdAt: entry.firstSeenAt, status: 'open', category: 'hardware', description: '',
+    }
+    if (appendToHistory(previous, 'source-cleared')) {
+      writeAuditSync({ actor: 'system', action: 'incident.source-resolve', detail: 'Alert absent from two successful source reads', ip: 'system', incidentId: id, episodeId: `${id}:${previous.createdAt}`, before: { ...previous }, after: { status: 'resolved' }, outcome: 'succeeded' })
+      if (entry.incident && !isUnderMaintenance({ hostname: previous.hostname, rack: previous.rack, category: previous.category })) {
+        const rule = matchRouting(previous.severity, previous.category)
+        enqueueNotification(previous, 'incident.source-resolve', `[VynDC] Alert cleared: ${previous.title}`, { includeSlack: rule.notifySlack, recipients: [...rule.notifyEmails, ...(rule.notifyOncall ? currentOnCallEmails() : []), ...defaultEmails] })
+      }
+    }
+    delete seen[id]
+  }
 
   for (const inc of incidents) {
+    if (seen[inc.id] && seen[inc.id].firstSeenAt !== inc.createdAt) {
+      if (seen[inc.id].incident) appendToHistory(seen[inc.id].incident!, 'episode-replaced')
+      delete seen[inc.id]
+    }
     // Clean up resolved — persist to history first
     if (inc.status === 'resolved') {
-      if (seen[inc.id]) appendToHistory(inc)
+      appendToHistory(inc)
       delete seen[inc.id]
       continue
     }
@@ -110,11 +111,25 @@ export function dispatchAlerts(incidents: Incident[]): void {
 
     // ── MAINTENANCE WINDOW SUPPRESSION ──────────────────────────
     const maintenanceCtx = { hostname: inc.hostname, rack: inc.rack, category: inc.category }
-    if (isUnderMaintenance(maintenanceCtx)) {
+    const slaPaused = isSlapaused(maintenanceCtx)
+    const previousEntry = seen[inc.id]
+    if (previousEntry) {
+      if (slaPaused && previousEntry.slaPauseStartedAt === undefined) previousEntry.slaPauseStartedAt = now
+      if (!slaPaused && previousEntry.slaPauseStartedAt !== undefined) {
+        previousEntry.slaPausedMs = (previousEntry.slaPausedMs ?? 0) + now - previousEntry.slaPauseStartedAt
+        delete previousEntry.slaPauseStartedAt
+      }
+    }
+    const slaAgeMin = Math.max(0, ageMin - ((previousEntry?.slaPausedMs ?? 0)
+      + (previousEntry?.slaPauseStartedAt !== undefined ? now - previousEntry.slaPauseStartedAt : 0)) / 60_000)
+    if (isUnderMaintenance(maintenanceCtx) || inc.sourceSuppressed) {
       // Mark as seen so we don't flood when the window ends, but skip all notifications
       if (!seen[inc.id]) {
         seen[inc.id] = {
           id: inc.id,
+          incident: inc,
+          slaPauseStartedAt: slaPaused ? now : undefined,
+          slaPausedMs: 0,
           firstSeenAt: inc.createdAt,
           severity: inc.severity,
           title: inc.title,
@@ -125,12 +140,14 @@ export function dispatchAlerts(incidents: Incident[]): void {
           ackBreachNotified: true,   // suppress SLA breach alerts during maintenance
           resolveBreachNotified: true,
         }
+      } else {
+        seen[inc.id].incident = inc
+        seen[inc.id].missingCount = 0
       }
       continue
     }
 
     // ── SLA PAUSE CHECK ──────────────────────────────────────────
-    const slaPaused = isSlapaused(maintenanceCtx)
     if (!seen[inc.id]) {
       // Catch-up suppression: if alert is already older than all SLA + escalation
       // thresholds, mark everything as already notified to avoid a historical flood.
@@ -139,6 +156,9 @@ export function dispatchAlerts(incidents: Incident[]): void {
 
       seen[inc.id] = {
         id:                     inc.id,
+        incident:               inc,
+        slaPauseStartedAt:      slaPaused ? now : undefined,
+        slaPausedMs:            0,
         firstSeenAt:            inc.createdAt,
         severity:               inc.severity,
         title:                  inc.title,
@@ -146,8 +166,8 @@ export function dispatchAlerts(incidents: Incident[]): void {
         escalationStep:         isCatchUp ? (policy?.steps.length ?? 0) : 0,
         acknowledged:           inc.status === 'acknowledged',
         resolved:               false,
-        ackBreachNotified:      isCatchUp || slaPaused || ageMin > slaTier.ackMinutes,
-        resolveBreachNotified:  isCatchUp || slaPaused || ageMin > slaTier.resolveMinutes,
+        ackBreachNotified:      isCatchUp || (!slaPaused && ageMin > slaTier.ackMinutes),
+        resolveBreachNotified:  isCatchUp || (!slaPaused && ageMin > slaTier.resolveMinutes),
       }
 
       if (!isCatchUp) {
@@ -158,37 +178,30 @@ export function dispatchAlerts(incidents: Incident[]): void {
           ...defaultEmails,
         ])]
         const msg = formatMsg('🚨', inc)
-        notify.push(async () => {
-          await sendWebhookNotifications(msg, { includeSlack: rule.notifySlack })
-          if (emails.length)    await sendEmail(emails, `[VynDC] ${inc.severity.toUpperCase()}: ${inc.title}`, plainText(msg))
-        })
+        enqueueNotification(inc, 'initial', msg, { includeSlack: rule.notifySlack, recipients: emails, subject: `[VynDC] ${inc.severity.toUpperCase()}: ${inc.title}` })
       }
       continue
     }
 
     const entry = seen[inc.id]
+    entry.incident = inc
+    entry.missingCount = 0
     entry.acknowledged = inc.status === 'acknowledged'
 
     // ── 2. SLA ACK BREACH ────────────────────────────────────────
-    if (!entry.acknowledged && !entry.ackBreachNotified && !slaPaused && ageMin > slaTier.ackMinutes) {
+    if (!entry.acknowledged && !entry.ackBreachNotified && !slaPaused && slaAgeMin > slaTier.ackMinutes) {
       entry.ackBreachNotified = true
       const emails = [...new Set([...oncall, ...defaultEmails])]
       const msg = `⚠️ *SLA ACK BREACH* — Not acknowledged within ${slaTier.ackMinutes}min\n*[${inc.severity.toUpperCase()}]* ${inc.title} (open ${Math.round(ageMin)}min)`
-      notify.push(async () => {
-        await sendWebhookNotifications(msg)
-        if (emails.length) await sendEmail(emails, `[VynDC SLA Breach] ${inc.title}`, plainText(msg))
-      })
+      enqueueNotification(inc, 'ack-breach', msg, { recipients: emails, subject: `[VynDC SLA Breach] ${inc.title}` })
     }
 
     // ── 3. SLA RESOLVE BREACH ────────────────────────────────────
-    if (!entry.resolveBreachNotified && !slaPaused && ageMin > slaTier.resolveMinutes) {
+    if (!entry.resolveBreachNotified && !slaPaused && slaAgeMin > slaTier.resolveMinutes) {
       entry.resolveBreachNotified = true
       const emails = [...new Set([...oncall, ...defaultEmails])]
       const msg = `🔴 *SLA RESOLVE BREACH* — Unresolved for ${Math.round(ageMin)}min (SLA: ${slaTier.resolveMinutes}min)\n*[${inc.severity.toUpperCase()}]* ${inc.title}`
-      notify.push(async () => {
-        await sendWebhookNotifications(msg)
-        if (emails.length) await sendEmail(emails, `[VynDC SLA Resolve Breach] ${inc.title}`, plainText(msg))
-      })
+      enqueueNotification(inc, 'resolve-breach', msg, { recipients: emails, subject: `[VynDC SLA Resolve Breach] ${inc.title}` })
     }
 
     // ── 4. ESCALATION STEPS ──────────────────────────────────────
@@ -204,18 +217,11 @@ export function dispatchAlerts(incidents: Incident[]): void {
         ])]
         const prefix = step.message ? `🔺 *${step.message}*` : `🔺 *Escalation step ${entry.escalationStep}*`
         const msg = `${prefix}\n*[${inc.severity.toUpperCase()}]* ${inc.title} — open ${Math.round(ageMin)}min`
-        notify.push(async () => {
-          await sendWebhookNotifications(msg, { includeSlack: step.notifySlack })
-          if (emails.length)    await sendEmail(emails, `[VynDC Escalation] ${inc.title}`, plainText(msg))
-        })
+        enqueueNotification(inc, `escalation-${entry.escalationStep}`, msg, { includeSlack: step.notifySlack, recipients: emails, subject: `[VynDC Escalation] ${inc.title}` })
       }
     }
   }
 
   saveSeenAlerts(seen)
 
-  // Fire all notifications without blocking the API response
-  for (const fn of notify) {
-    fn().catch(e => console.error('[dispatcher] notification error:', e))
-  }
 }

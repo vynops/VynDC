@@ -203,56 +203,46 @@ cd VynDC
 # 2. Install dependencies
 npm install
 
-# 3. Configure environment
-cp .env.local.example .env.local
-# Edit .env.local with your Prometheus URL, Groq key, and SMTP settings
+# 3. First-run configuration
+# npm install creates .env.local with a random session secret and bootstrap admin
 
 # 4. Start development server
 npm run dev
 # Dashboard: http://localhost:3040
 ```
 
+`npm install` creates `.env.local` only when it is missing, generates a random session secret, and sets the bootstrap admin to `admin@vyndc.local` / `changeme`. On the first server startup, VynDC creates that admin account. The first sign-in must set a new password before accessing the dashboard. Existing `.env.local` files are preserved. Configure Prometheus, AI, and notification integrations later in Settings.
+
 ### Production with PM2
 
 ```bash
-# 1. Build for production
+# 1. Install dependencies and create first-run configuration if needed
+npm install
+
+# 2. Build for production
 npm run build
 
-# 2. Start with PM2
+# 3. Start with PM2
 pm2 start npm --name vyndc -- start -- -p 3040
 pm2 save
 pm2 startup   # enable auto-start on reboot
-```
-
-Or with the provided deploy script (from Windows):
-
-```powershell
-.\deploy.ps1
 ```
 
 ---
 
 ## Configuration
 
-Full reference for `.env.local`:
+Bootstrap variables generated in `.env.local`:
 
 | Variable | Description | Required |
 |---|---|---|
-| `VYNDC_SECRET` | Random 32-byte secret for session signing (`openssl rand -base64 32`) | **required** |
-| `GROQ_API_KEY` | Groq API key for AI analysis — free at [console.groq.com](https://console.groq.com) | **required** |
-| `PROMETHEUS_URL` | Prometheus server URL for metrics storage and queries | **required** |
-| `SNMP_COMMUNITY` | SNMP v2c community string for switch/PDU monitoring | optional |
-| `SNMP_V3_USER` | SNMP v3 username for authenticated polling | optional |
-| `IPMI_DEFAULT_USER` | Default IPMI/BMC username for server monitoring | optional |
-| `SLACK_WEBHOOK_URL` | Slack incoming webhook URL for hardware failure notifications | optional |
-| `SMTP_HOST` | SMTP server hostname for email alerts | optional |
-| `SMTP_PORT` | SMTP port (default: 587) | optional |
-| `SMTP_USER` | SMTP authentication username | optional |
-| `SMTP_PASS` | SMTP authentication password | optional |
-| `SMTP_FROM` | Sender address for alert emails | optional |
-| `ALERT_RECIPIENTS` | Comma-separated fallback email addresses for alerts | optional |
-| `PAGERDUTY_ROUTING_KEY` | PagerDuty routing key for critical hardware alerts | optional |
-| `PORT` | HTTP port (default: 3040) | optional |
+| `VYNDC_SECRET` | Random session-signing secret, generated automatically when `.env.local` is first created | generated automatically |
+| `VYNDC_ADMIN_EMAIL` | Bootstrap administrator email; defaults to `admin@vyndc.local` | generated automatically |
+| `VYNDC_ADMIN_PASSWORD` | Temporary bootstrap password; defaults to `changeme` and must be changed on first login | generated automatically |
+| `GROQ_API_KEY` | Optional Groq API key fallback; AI can also be configured in Settings | optional |
+| `VYNDC_INCIDENT_WORKER_ENABLED` | Set to `true` to enable the background incident worker; disabled by default | optional, not generated |
+
+Prometheus, AI, SNMP, IPMI, and notification settings are configured from the dashboard rather than required environment variables.
 
 ---
 
@@ -294,25 +284,61 @@ VynDC connects to Prometheus Alertmanager and automatically converts firing aler
 **Incident lifecycle:**
 
 ```
-Alertmanager ALERT
-       ↓
-  GET /api/incidents  (polls every 30s)
-       ↓
-  dispatchAlerts()
-       ↓
-  ┌─────────────────────────────────────┐
-  │  New incident?  →  Slack + Email    │
-  │  SLA breach?    →  Slack + Email    │
-  │  Escalation?    →  Next step notify │
-  └─────────────────────────────────────┘
-       ↓
-  Saved to data/incidents.json
+Alertmanager
+  |
+Node worker (every 60 seconds) / dashboard incident polling
+  |
+Episode-aware reconciliation and dispatch safety guards
+  |
+Durable notification queue -> per-channel delivery and retries
+  |
+Incident history + action/delivery audit journal
 ```
 
 **Built-in flood prevention:**
 - **55-second dispatch lock** — `data/dispatch-lock.json` prevents concurrent poll floods
 - **Catch-up suppression** — First-seen old alerts are pre-marked; no historical notification floods on startup
 - **Escalation cap** — Escalation steps are bounded to the policy length
+
+### Background Processing And History
+
+Set `VYNDC_INCIDENT_WORKER_ENABLED=true` in the application environment and restart
+the long-running Next.js Node server to enable independent processing. This is
+opt-in: without the flag, incident polling still creates queue jobs but delivery
+does not run. The worker is not started during builds and does not require a
+browser session. Do not enable it until notification destinations are approved.
+This deployment model requires a persistent Node process, not serverless hosting.
+
+An episode is identified by its alert fingerprint and source start time. Operator
+overrides apply only to that episode. Manual resolution is archived immediately;
+alerts missing from two successful dispatch reads are archived as source-cleared.
+Source outages never count as successful missing-alert reads. Silenced/inhibited
+source alerts and maintenance windows suppress lifecycle notifications.
+
+Editor/admin actions validate incident IDs, episode timestamps and state transitions.
+During a source outage, a live snapshot permits actions for at most five minutes;
+older snapshots fail closed. Simulation data remains available, but simulation
+notifications are marked skipped rather than sent. Legacy overrides are reused
+only when their episode can be established from seen-alert state; legacy alerts
+are not replayed as notifications during migration.
+
+Recent audit entries remain in `data/audit-log.json`. The append-only
+`data/audit-history.jsonl` journal preserves existing recent records on first use
+and retains subsequent action/delivery events beyond the 1,000-entry recent cap.
+Actions include actor, incident/episode IDs, timestamps, before/after values, notes,
+and requested/succeeded outcomes. Writes are flushed and JSON replacement is atomic;
+cross-process store locks protect read/modify/write operations.
+
+Back up `data/` and restrict access to the application account. Incident history,
+queue results and the audit journal are not automatically pruned. Define and
+operate a retention/archival policy; do not delete pending/processing queue jobs
+or live lock files. These local files are not a tamper-proof compliance archive.
+
+Monitor `data/incident-worker.json` for last-run, last-success and error state, and
+the notification inspection endpoint below for failed deliveries. Full production
+acceptance requires an approved test incident, authenticated editor/viewer checks,
+verified receipt at controlled destinations, and recorded history. Automated tests
+mock providers; they do not prove real Slack/email receipt.
 
 ---
 
@@ -357,11 +383,48 @@ The copilot has access to live server metrics, alert history, rack topology, and
 
 | Channel | Trigger | Setup |
 |---|---|---|
-| Slack | New incident, SLA breach, escalation step | `SLACK_WEBHOOK_URL` in settings |
-| Email (SMTP) | New incident, SLA breach, escalation step | SMTP settings in Settings → Alerting |
-| PagerDuty | Critical hardware alerts | `PAGERDUTY_ROUTING_KEY` in settings |
+| Slack | Incident lifecycle, SLA breach, escalation | Slack webhook in Settings -> Alerting |
+| Teams | Incident lifecycle, SLA breach, escalation | Teams webhook in Settings -> Alerting |
+| Custom webhook | Incident lifecycle, SLA breach, escalation | Custom webhook in Settings -> Alerting |
+| Email (SMTP) | Incident lifecycle, SLA breach, escalation | Enable email; configure SMTP and routing/on-call/default recipients |
 
 All notification channels are configurable from the **Settings → Alerting** page in the dashboard without editing environment files.
+
+Incident notification jobs are persisted per channel in `data/notification-queue.json`.
+Successful channels are not repeated when another channel fails. Delivery uses
+timeouts, up to six attempts, exponential backoff, and recoverable processing leases.
+Each batch handles at most 20 jobs with four concurrent deliveries. Missing channel
+configuration produces an explicit failure rather than a successful send. SMTP
+certificate verification is enabled; internal SMTP certificates must have a trusted
+CA chain (for example, via `NODE_EXTRA_CA_CERTS`).
+
+Delivery is at-least-once: a crash or uncertain provider response can still cause a
+duplicate. A `delivered` result means provider acceptance, not a human read receipt.
+Maintenance, resolved/replaced episodes and acknowledgement are rechecked before
+pending lifecycle jobs send. Source outages defer lifecycle jobs without consuming
+attempts; explicit operator action messages remain deliverable.
+
+Authenticated editors/admins can use `GET /api/incidents/notifications` to inspect
+counts and the latest 100 results without message bodies or recipients. After fixing
+a failed channel, `POST /api/incidents/notifications` with `{"id":"<job-id>"}` resets
+that failed job for another bounded attempt sequence and records the actor. Already
+delivered or skipped jobs cannot be retried through this endpoint. Retried jobs run
+only when the worker is enabled; retrying does not send synchronously.
+
+Run `npm test`, `npx tsc --noEmit`, `npm run lint`, and `npm run build` before release.
+
+After building, run `npm run test:incident-e2e` for isolated runtime acceptance.
+It starts a temporary production-mode app with generated users/secrets, a local
+Alertmanager fixture, HTTP webhook receivers and an SMTP receiver. It checks
+authentication, role enforcement, lifecycle/history, scheduled retries, explicit
+retry audit, SLA/escalation dispatch, maintenance, outages and restart recovery.
+Real production data and destinations are not used. The temporary app and data
+are removed on completion; a sanitized report remains in the ignored
+`.incident-e2e-results.json`. Scheduled checks normally take about two minutes.
+
+SLA accounting excludes pause time observed by dispatch cycles. A pause-only
+window does not permanently consume breach eligibility; normal breach evaluation
+resumes afterward. Observation precision follows the worker/poll interval.
 
 ---
 

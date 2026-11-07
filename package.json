@@ -3,10 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/setup-env.mjs",
     "dev": "next dev -p 3040 --turbopack",
     "build": "next build",
     "start": "next start -p 3040",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:incident-e2e": "node --experimental-strip-types tests/incident-e2e.mts"
   },
   "dependencies": {
     "@types/nodemailer": "^8.0.1",
@@ -27,8 +30,10 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/smtp-server": "^3.5.13",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "smtp-server": "^3.19.16",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

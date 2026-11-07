@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import useSWR from 'swr'
-import { Save, Eye, EyeOff, RefreshCw, Brain, Bell, Database, Settings as SettingsIcon, Mail, Server, GitBranch, Send, CheckCircle, XCircle, Shield, Loader2 } from 'lucide-react'
+import { Save, Eye, EyeOff, RefreshCw, Brain, Bell, Database, Settings as SettingsIcon, Mail, Server, GitBranch, Send, CheckCircle, XCircle, AlertTriangle, Shield, Loader2 } from 'lucide-react'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 const MASKED = '***configured***'
@@ -12,12 +12,9 @@ const AI_PROVIDERS = [
     label: 'Groq (Recommended)',
     keyLabel: 'Groq API Key',
     keyPlaceholder: 'gsk_...',
-    defaultModel: 'llama-3.3-70b-versatile',
+    defaultModel: 'openai/gpt-oss-20b',
     models: [
-      { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile' },
-      { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant (Fast)' },
-      { value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B (Long context)' },
-      { value: 'gemma2-9b-it', label: 'Gemma 2 9B IT' },
+      { value: 'openai/gpt-oss-20b', label: 'GPT OSS 20B (Recommended)' },
     ],
   },
   {
@@ -116,7 +113,7 @@ interface AuditEntry {
 }
 
 interface ToastState {
-  kind: 'success' | 'error'
+  kind: 'success' | 'warning' | 'error'
   title: string
   message: string
 }
@@ -152,7 +149,7 @@ export default function SettingsPage() {
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
   const [channelTestResults, setChannelTestResults] = useState<Record<string, { ok: boolean; msg: string }>>({})
   const [testingAi, setTestingAi] = useState(false)
-  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [aiTestResult, setAiTestResult] = useState<{ kind: ToastState['kind']; msg: string } | null>(null)
   const [connTest, setConnTest] = useState<Record<string, { status: 'idle'|'testing'|'ok'|'error'; msg: string }>>({})
 
   function showToast(kind: ToastState['kind'], title: string, message: string) {
@@ -280,19 +277,23 @@ export default function SettingsPage() {
         suggestedModel?: string | null
       }
 
-      if (json.modelAvailable === false && json.suggestedModel && json.suggestedModel !== form.aiModel) {
+      const suggestionChanged = json.modelAvailable === false && !!json.suggestedModel && json.suggestedModel !== form.aiModel
+      if (suggestionChanged && json.suggestedModel) {
         update('aiModel', json.suggestedModel)
       }
 
-      setAiTestResult({
-        ok: !!(res.ok && json.ok !== false),
-        msg: json.message ?? json.error ?? (res.ok ? 'Connected' : 'Connection failed'),
-      })
       const msg = json.message ?? json.error ?? (res.ok ? 'Connected' : 'Connection failed')
-      showToast(res.ok && json.ok !== false ? 'success' : 'error', 'AI Test Connection', msg)
+      const kind = json.modelAvailable === false
+        ? 'warning'
+        : res.ok && json.ok !== false ? 'success' : 'error'
+      const resultMessage = suggestionChanged
+        ? `${msg} The suggested model was filled in; save settings and test again.`
+        : msg
+      setAiTestResult({ kind, msg: resultMessage })
+      showToast(kind, kind === 'warning' ? 'Provider Connected, Model Unavailable' : 'AI Test Connection', resultMessage)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Network error'
-      setAiTestResult({ ok: false, msg })
+      setAiTestResult({ kind: 'error', msg })
       showToast('error', 'AI Test Connection Failed', msg)
     } finally {
       setTestingAi(false)
@@ -347,15 +348,11 @@ export default function SettingsPage() {
 
   const isLive = !!(form.prometheusUrl || form.alertmanagerUrl)
   const currentProvider = AI_PROVIDERS.find(p => p.id === form.aiProvider) ?? AI_PROVIDERS[0]
-  const availableModels = currentProvider.models.length > 0
-    ? currentProvider.models
-    : [{ value: form.aiModel, label: `${form.aiModel || currentProvider.defaultModel} (custom)` }]
-  const suggestedModels = availableModels.map(m => m.value)
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-2xl mx-auto">
       {toast && (
-        <div className={`rounded-xl border px-3 py-2 text-xs ${toast.kind === 'success' ? 'bg-green-500/10 border-green-500/30 text-green-300' : 'bg-red-500/10 border-red-500/30 text-red-300'}`}>
+        <div className={`rounded-xl border px-3 py-2 text-xs ${toast.kind === 'success' ? 'bg-green-500/10 border-green-500/30 text-green-300' : toast.kind === 'warning' ? 'bg-amber-500/10 border-amber-500/30 text-amber-300' : 'bg-red-500/10 border-red-500/30 text-red-300'}`}>
           <div className="font-semibold">{toast.title}</div>
           <div className="mt-0.5 break-all">{toast.message}</div>
         </div>
@@ -676,7 +673,6 @@ export default function SettingsPage() {
         <Field label="AI Model">
           <div className="space-y-1">
             <input
-              list="ai-model-suggestions"
               value={form.aiModel}
               onChange={e => {
                 update('aiModel', e.target.value)
@@ -685,11 +681,6 @@ export default function SettingsPage() {
               placeholder={currentProvider.defaultModel}
               className="settings-input"
             />
-            <datalist id="ai-model-suggestions">
-              {suggestedModels.map(model => (
-                <option key={model} value={model} />
-              ))}
-            </datalist>
             <div className="text-[10px] text-slate-600">You can paste any provider model ID returned by Test Connection.</div>
           </div>
         </Field>
@@ -716,14 +707,13 @@ export default function SettingsPage() {
               {testingAi ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
               {testingAi ? 'Testing…' : 'Test Connection'}
             </button>
-            {aiTestResult?.ok && (
-              <div className="flex items-center gap-1.5 text-[11px] text-green-400">
-                <CheckCircle size={11} /> {aiTestResult.msg}
-              </div>
-            )}
-            {aiTestResult && !aiTestResult.ok && (
-              <div className="flex items-start gap-1.5 text-[11px] text-red-400">
-                <XCircle size={11} className="shrink-0 mt-0.5" />
+            {aiTestResult && (
+              <div className={`flex items-start gap-1.5 text-[11px] ${aiTestResult.kind === 'success' ? 'text-green-400' : aiTestResult.kind === 'warning' ? 'text-amber-400' : 'text-red-400'}`}>
+                {aiTestResult.kind === 'success'
+                  ? <CheckCircle size={11} className="shrink-0 mt-0.5" />
+                  : aiTestResult.kind === 'warning'
+                    ? <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+                    : <XCircle size={11} className="shrink-0 mt-0.5" />}
                 <span>{aiTestResult.msg}</span>
               </div>
             )}

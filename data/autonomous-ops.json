@@ -1,0 +1,12 @@
+{
+  "mode": "recommend-only",
+  "executionEnabled": false,
+  "lowRiskAutoClasses": [
+    "notify-only"
+  ],
+  "maxAutoActionsPerHour": 10,
+  "safetyPolicies": {
+    "requireRollbackPlan": true,
+    "blockOutsideBusinessHours": false
+  }
+}

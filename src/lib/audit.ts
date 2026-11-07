@@ -7,6 +7,8 @@
 import fs from 'fs'
 import path from 'path'
 import { NextRequest } from 'next/server'
+import { randomUUID } from 'node:crypto'
+import { readJson, writeJson, withStoreLock } from './json-store'
 
 export interface AuditEntry {
   ts: string      // ISO-8601 timestamp
@@ -14,9 +16,17 @@ export interface AuditEntry {
   action: string  // dot-notation e.g. 'login.success', 'incident.resolve'
   detail: string  // human-readable description
   ip: string      // client IP
+  id?: string
+  incidentId?: string
+  episodeId?: string
+  before?: Record<string, unknown>
+  after?: Record<string, unknown>
+  notes?: string
+  outcome?: 'requested' | 'succeeded' | 'failed' | 'skipped'
 }
 
 const AUDIT_FILE  = path.join(process.cwd(), 'data', 'audit-log.json')
+const ARCHIVE_FILE = path.join(process.cwd(), 'data', 'audit-history.jsonl')
 const MAX_ENTRIES = 1000
 
 function load(): AuditEntry[] {
@@ -27,15 +37,25 @@ function load(): AuditEntry[] {
 }
 
 /** Write an audit entry. Fire-and-forget — does not block the caller. */
+export function writeAuditSync(entry: Omit<AuditEntry, 'ts'>): void {
+  withStoreLock('audit', () => {
+    const record = { ...entry, id: randomUUID(), ts: new Date().toISOString() }
+    const log = readJson<AuditEntry[]>(AUDIT_FILE, [])
+    const records = fs.existsSync(ARCHIVE_FILE) ? [record] : [...log].reverse().concat(record)
+    const descriptor = fs.openSync(ARCHIVE_FILE, 'a', 0o600)
+    try {
+      fs.appendFileSync(descriptor, records.map(entry => JSON.stringify(entry)).join('\n') + '\n', 'utf8')
+      fs.fsyncSync(descriptor)
+    } finally { fs.closeSync(descriptor) }
+    log.unshift(record)
+    writeJson(AUDIT_FILE, log.slice(0, MAX_ENTRIES))
+  })
+}
+
 export function writeAudit(entry: Omit<AuditEntry, 'ts'>): void {
   setImmediate(() => {
     try {
-      const dir = path.dirname(AUDIT_FILE)
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-      const log = load()
-      log.unshift({ ts: new Date().toISOString(), ...entry })
-      if (log.length > MAX_ENTRIES) log.splice(MAX_ENTRIES)
-      fs.writeFileSync(AUDIT_FILE, JSON.stringify(log, null, 2), 'utf8')
+      writeAuditSync(entry)
     } catch (e) {
       console.error('[audit] write error:', e)
     }
