@@ -3,6 +3,7 @@ import { requireRole } from '@/lib/auth'
 import type { SessionPayload } from '@/lib/auth'
 import { recordPromptHistory } from '@/lib/copilot-history'
 import { recordUsage } from '@/lib/copilot-usage'
+import { readOpenAICompletion } from '@/lib/openai-completion'
 import { getSettings } from '@/lib/settings-store'
 import {
   simulatedServers,
@@ -35,6 +36,7 @@ interface ProviderResponse {
   content: string
   promptTokens: number
   completionTokens: number
+  model?: string
 }
 
 function normalizeProvider(value: string | undefined): AIProvider {
@@ -67,6 +69,7 @@ async function callOpenAICompatible(baseUrl: string, apiKey: string, model: stri
     body: JSON.stringify({
       model,
       messages,
+      stream: false,
       max_tokens: 600,
       temperature: 0.4,
     }),
@@ -76,16 +79,14 @@ async function callOpenAICompatible(baseUrl: string, apiKey: string, model: stri
     return { ok: false, content: '', promptTokens: 0, completionTokens: 0 }
   }
 
-  const data = await response.json() as {
-    choices?: Array<{ message?: { content?: string } }>
-    usage?: { prompt_tokens?: number; completion_tokens?: number }
-  }
+  const data = await readOpenAICompletion(response)
 
   return {
     ok: true,
     content: data.choices?.[0]?.message?.content ?? '',
     promptTokens: data.usage?.prompt_tokens ?? 0,
     completionTokens: data.usage?.completion_tokens ?? 0,
+    model,
   }
 }
 
@@ -167,12 +168,12 @@ async function callAnthropic(apiKey: string, model: string, messages: Message[])
       model,
       system,
       max_tokens: 600,
-      temperature: 0.4,
       messages: chat,
     }),
   })
 
   if (!response.ok) {
+    console.warn('[copilot] Anthropic chat request failed', { status: response.status })
     return { ok: false, content: '', promptTokens: 0, completionTokens: 0 }
   }
 
@@ -523,7 +524,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (completion.promptTokens > 0 || completion.completionTokens > 0) {
-      recordUsage(completion.promptTokens, completion.completionTokens)
+      recordUsage(completion.promptTokens, completion.completionTokens, { provider, model: completion.model ?? model })
     }
     return NextResponse.json({ message: completion.content, demo: false, dataSources: snapshot.dataSources })
   } catch {

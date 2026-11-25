@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import type { AppSettings } from './settings-store'
 
 interface DayUsage {
   requests: number
@@ -8,7 +9,18 @@ interface DayUsage {
   totalTokens: number
 }
 
-type UsageStore = Record<string, DayUsage>
+type ModelIdentity = { provider: AppSettings['aiProvider']; model: string }
+type ModelUsage = DayUsage & ModelIdentity
+type UsageStore = Record<string, DayUsage & { models?: ModelUsage[] }>
+type RecentUsage = DayUsage & { date: string; provider: string | null; model: string | null }
+
+export interface CopilotUsageResponse {
+  today: DayUsage
+  allTime: DayUsage
+  recentByModel: RecentUsage[]
+}
+
+const EMPTY: DayUsage = { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 }
 
 const DATA_DIR = path.join(process.cwd(), 'data')
 const FILE = path.join(DATA_DIR, 'copilot-usage.json')
@@ -36,33 +48,48 @@ function write(data: UsageStore) {
   fs.writeFileSync(FILE, JSON.stringify(data, null, 2), 'utf8')
 }
 
-export function recordUsage(promptTokens: number, completionTokens: number): void {
+export function recordUsage(promptTokens: number, completionTokens: number, identity: ModelIdentity): void {
   const store = read()
   const key = today()
-  const existing = store[key] ?? { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 }
-  store[key] = {
-    requests: existing.requests + 1,
-    promptTokens: existing.promptTokens + promptTokens,
-    completionTokens: existing.completionTokens + completionTokens,
-    totalTokens: existing.totalTokens + promptTokens + completionTokens,
-  }
+  const existing = store[key] ?? EMPTY
+  const models = store[key]?.models ?? []
+  const index = models.findIndex(row => row.provider === identity.provider && row.model === identity.model)
+  const increment = { requests: 1, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens }
+  const modelUsage = { ...identity, ...sum(models[index] ?? EMPTY, increment) }
+  if (index === -1) models.push(modelUsage)
+  else models[index] = modelUsage
+  store[key] = { ...sum(existing, increment), models }
   write(store)
 }
 
-export function getUsageToday(): DayUsage {
-  const store = read()
-  return store[today()] ?? { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+function sum(a: DayUsage, b: DayUsage, sign = 1): DayUsage {
+  return {
+    requests: a.requests + b.requests * sign,
+    promptTokens: a.promptTokens + b.promptTokens * sign,
+    completionTokens: a.completionTokens + b.completionTokens * sign,
+    totalTokens: a.totalTokens + b.totalTokens * sign,
+  }
 }
 
-export function getUsageAllTime(): DayUsage {
+export function getCopilotUsage(now = new Date()): CopilotUsageResponse {
   const store = read()
-  return Object.values(store).reduce<DayUsage>(
-    (acc, day) => ({
-      requests: acc.requests + day.requests,
-      promptTokens: acc.promptTokens + day.promptTokens,
-      completionTokens: acc.completionTokens + day.completionTokens,
-      totalTokens: acc.totalTokens + day.totalTokens,
-    }),
-    { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 }
-  )
+  const date = now.toISOString().slice(0, 10)
+  const firstDay = new Date(now)
+  firstDay.setUTCDate(firstDay.getUTCDate() - 6)
+  const start = firstDay.toISOString().slice(0, 10)
+  const recentByModel: RecentUsage[] = []
+  for (const day of Object.keys(store).filter(day => day >= start && day <= date).sort().reverse()) {
+    const usage = store[day]
+    const models = usage.models ?? []
+    for (const model of models) recentByModel.push({ date: day, ...model })
+    const unattributed = models.reduce((total, model) => sum(total, model, -1), usage)
+    if (unattributed.requests > 0) {
+      recentByModel.push({ date: day, provider: null, model: null, ...sum(EMPTY, unattributed) })
+    }
+  }
+  return {
+    today: sum(EMPTY, store[date] ?? EMPTY),
+    allTime: Object.values(store).reduce((total, day) => sum(total, day), EMPTY),
+    recentByModel,
+  }
 }

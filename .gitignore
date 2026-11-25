@@ -11,14 +11,18 @@ data/audit-log.json
 data/copilot-usage.json
 data/incident-history.json
 data/incidents.json
+data/audit-history.jsonl
+data/incident-snapshot.json
+data/incident-simulation.json
+data/notification-queue.json
+data/incident-worker.json
+data/*.lock
+data/*.tmp
+.agent-state.md
+.incident-e2e-results.json
+.incident-build.log
 
 # Editor / temporary backup files
 *-
 *.ts1
 *.tsx1
-
-# runtime JSON data
-data/*.json
-data/*.json2
-!data/.gitkeep
-!data/*.example.json

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import useSWR from 'swr'
+import type { CopilotUsageResponse } from '@/lib/copilot-usage'
 import { Save, Eye, EyeOff, RefreshCw, Brain, Bell, Database, Settings as SettingsIcon, Mail, Server, GitBranch, Send, CheckCircle, XCircle, AlertTriangle, Shield, Loader2 } from 'lucide-react'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
@@ -135,7 +136,7 @@ const ACTION_COLOR: Record<string, string> = {
 
 export default function SettingsPage() {
   const { data: settings, mutate } = useSWR<AppSettings>('/api/settings', fetcher)
-  const { data: usage, mutate: refreshUsage } = useSWR('/api/copilot/usage', fetcher, { refreshInterval: 30000 })
+  const { data: usage, mutate: refreshUsage } = useSWR<CopilotUsageResponse>('/api/copilot/usage', fetcher, { refreshInterval: 30000 })
   const { data: auditLog = [], mutate: refreshAudit } = useSWR<AuditEntry[]>('/api/audit?limit=100', fetcher, { refreshInterval: 60000 })
   const [form, setForm] = useState<AppSettings | null>(null)
   const [showKey, setShowKey] = useState(false)
@@ -720,11 +721,11 @@ export default function SettingsPage() {
           </div>
         </Field>
         {/* Usage stats */}
-        {usage && (
+        {usage?.today && (
           <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-3 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-medium text-slate-300">Today&apos;s Usage</span>
-              <button onClick={() => refreshUsage()} className="text-slate-600 hover:text-slate-400"><RefreshCw size={11} /></button>
+              <button type="button" aria-label="Refresh usage" onClick={() => refreshUsage()} className="text-slate-600 hover:text-slate-400"><RefreshCw size={11} /></button>
             </div>
             <div className="grid grid-cols-3 gap-2">
               {[
@@ -738,7 +739,30 @@ export default function SettingsPage() {
                 </div>
               ))}
             </div>
-            <div className="text-[10px] text-slate-500">Total tokens today: {(usage.today.promptTokens + usage.today.completionTokens).toLocaleString()}</div>
+            <div className="flex flex-wrap gap-x-4 text-[10px] text-slate-400">
+              <span>Total tokens today: {usage.today.totalTokens.toLocaleString()}</span>
+              <span>All-time tokens: {usage.allTime.totalTokens.toLocaleString()}</span>
+            </div>
+            <div className="border-t border-slate-800 pt-2">
+              <h3 className="text-[11px] font-medium text-slate-300">Last 7 days by model (UTC)</h3>
+              {usage.recentByModel?.length ? (
+                <ul className="mt-1 divide-y divide-slate-800">
+                  {usage.recentByModel.map(row => (
+                    <li key={JSON.stringify([row.date, row.provider, row.model])} className="flex flex-wrap justify-between gap-x-3 gap-y-1 py-1.5 text-[11px]">
+                      <div className="min-w-0">
+                        <time dateTime={row.date} className="mr-2 text-slate-400">{row.date}</time>
+                        <span className="break-all text-slate-300">
+                          {row.model ? `${AI_PROVIDERS.find(p => p.id === row.provider)?.label.replace(' (Recommended)', '') ?? row.provider} / ${row.model}` : 'Unattributed (older usage)'}
+                        </span>
+                      </div>
+                      <span className="shrink-0 text-slate-400">{row.requests.toLocaleString()} req · {row.totalTokens.toLocaleString()} tok</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-[11px] text-slate-400">No recorded usage in the last 7 days.</p>
+              )}
+            </div>
           </div>
         )}
       </Section>
